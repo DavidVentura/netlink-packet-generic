@@ -1,5 +1,5 @@
 [package]
-name = "netlink-packet-generic"
+name = "netlink-packet-ipvs"
 version = "0.3.3"
 authors = ["Leo <leo881003@gmail.com>"]
 edition = "2018"
@@ -14,6 +14,7 @@ description = "generic netlink packet types"
 anyhow = "1.0.39"
 byteorder = "1.4.2"
 netlink-packet-core = { version = "0.7.0" }
+netlink-packet-generic = "0.3.3"
 netlink-packet-utils = { version = "0.5.2" }
 
 [dev-dependencies]

@@ -3,6 +3,7 @@
 use crate::constants::*;
 use anyhow::Context;
 use byteorder::{ByteOrder, NativeEndian};
+use netlink_packet_generic::constants::CTRL_ATTR_OP_FLAGS;
 use netlink_packet_utils::{
     nla::{Nla, NlaBuffer, NlasIterator},
     parsers::*,
@@ -10,7 +11,9 @@ use netlink_packet_utils::{
     DecodeError,
 };
 use std::mem::size_of_val;
+use std::net::IpAddr;
 
+/*
 mod mcast;
 mod oppolicy;
 mod ops;
@@ -20,87 +23,131 @@ pub use mcast::*;
 pub use oppolicy::*;
 pub use ops::*;
 pub use policy::*;
+*/
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum GenlCtrlAttrs {
-    FamilyId(u16),
-    FamilyName(String),
-    Version(u32),
-    HdrSize(u32),
-    MaxAttr(u32),
-    Ops(Vec<Vec<OpAttrs>>),
-    McastGroups(Vec<Vec<McastGrpAttrs>>),
-    Policy(PolicyAttr),
-    OpPolicy(OppolicyAttr),
-    Op(u32),
+pub struct Service {
+    address: IpAddr,
+    netmask: Netmask,
+    scheduler: Scheduler,
+    flags: Flags,
+    port: Option<u16>,
+    fw_mark: Option<u32>,
+    persistence_timeout: Option<u32>,
+    family: AddressFamily,
+    protocol: Protocol,
 }
 
-impl Nla for GenlCtrlAttrs {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Netmask(u8);
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Flags(u32);
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Scheduler {
+    RoundRobin,
+    WeightedRoundRobin,
+    LeastConnection,
+    WeightedLeastConnection,
+    LocalityBasedLeastConnection,
+    LocalityBasedLeastConnectionWithReplication,
+    DestinationHashing,
+    SourceHashing,
+    ShortestExpectedDelay,
+    NeverQueue,
+    WeightedFailover,
+    WeightedOverflow,
+    MaglevHashing,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AddressFamily {
+    IPv4,
+    IPv6,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Protocol {
+    TCP,
+    UDP,
+    SCTP,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum IpvsCtrlAttrs {
+    AddressFamily(AddressFamily),
+    Protocol(Protocol),
+    Addr(IpAddr),
+    Port(u16),
+    Flags(Flags),
+    // TODO: Fwmark
+    Scheduler(Scheduler),
+    Timeout(Option<u32>),
+    Netmask(Netmask),
+    // TODO: stats / stats64
+}
+
+impl Nla for IpvsCtrlAttrs {
     fn value_len(&self) -> usize {
-        use GenlCtrlAttrs::*;
-        match self {
-            FamilyId(v) => size_of_val(v),
-            FamilyName(s) => s.len() + 1,
-            Version(v) => size_of_val(v),
-            HdrSize(v) => size_of_val(v),
-            MaxAttr(v) => size_of_val(v),
-            Ops(nlas) => OpList::from(nlas).as_slice().buffer_len(),
-            McastGroups(nlas) => {
-                McastGroupList::from(nlas).as_slice().buffer_len()
-            }
-            Policy(nla) => nla.buffer_len(),
-            OpPolicy(nla) => nla.buffer_len(),
-            Op(v) => size_of_val(v),
-        }
+        println!("value len 333");
+        // TODO
+        //match self {}
+        return 333;
     }
 
+    // u16?? same with constants
     fn kind(&self) -> u16 {
-        use GenlCtrlAttrs::*;
         match self {
-            FamilyId(_) => CTRL_ATTR_FAMILY_ID,
-            FamilyName(_) => CTRL_ATTR_FAMILY_NAME,
-            Version(_) => CTRL_ATTR_VERSION,
-            HdrSize(_) => CTRL_ATTR_HDRSIZE,
-            MaxAttr(_) => CTRL_ATTR_MAXATTR,
-            Ops(_) => CTRL_ATTR_OPS,
-            McastGroups(_) => CTRL_ATTR_MCAST_GROUPS,
-            Policy(_) => CTRL_ATTR_POLICY,
-            OpPolicy(_) => CTRL_ATTR_OP_POLICY,
-            Op(_) => CTRL_ATTR_OP,
+            IpvsCtrlAttrs::AddressFamily(_) => IPVS_SVC_ATTR_AF,
+            IpvsCtrlAttrs::Protocol(_) => IPVS_SVC_ATTR_PROTOCOL,
+            IpvsCtrlAttrs::Addr(_) => IPVS_SVC_ATTR_ADDR,
+            IpvsCtrlAttrs::Port(_) => IPVS_SVC_ATTR_PORT,
+            IpvsCtrlAttrs::Flags(_) => IPVS_SVC_ATTR_FLAGS,
+            IpvsCtrlAttrs::Scheduler(_) => IPVS_SVC_ATTR_SCHED_NAME,
+            IpvsCtrlAttrs::Timeout(_) => IPVS_SVC_ATTR_TIMEOUT,
+            IpvsCtrlAttrs::Netmask(_) => IPVS_SVC_ATTR_NETMASK,
         }
     }
 
     fn emit_value(&self, buffer: &mut [u8]) {
-        use GenlCtrlAttrs::*;
-        match self {
-            FamilyId(v) => NativeEndian::write_u16(buffer, *v),
-            FamilyName(s) => {
-                buffer[..s.len()].copy_from_slice(s.as_bytes());
-                buffer[s.len()] = 0;
+        println!("not emitting value");
+        /*
+            use IpvsCtrlAttrs::*;
+            match self {
+                FamilyId(v) => NativeEndian::write_u16(buffer, *v),
+                FamilyName(s) => {
+                    buffer[..s.len()].copy_from_slice(s.as_bytes());
+                    buffer[s.len()] = 0;
+                }
+                Version(v) => NativeEndian::write_u32(buffer, *v),
+                HdrSize(v) => NativeEndian::write_u32(buffer, *v),
+                MaxAttr(v) => NativeEndian::write_u32(buffer, *v),
+                Ops(nlas) => {
+                    OpList::from(nlas).as_slice().emit(buffer);
+                }
+                McastGroups(nlas) => {
+                    McastGroupList::from(nlas).as_slice().emit(buffer);
+                }
+                Policy(nla) => nla.emit_value(buffer),
+                OpPolicy(nla) => nla.emit_value(buffer),
+                Op(v) => NativeEndian::write_u32(buffer, *v),
             }
-            Version(v) => NativeEndian::write_u32(buffer, *v),
-            HdrSize(v) => NativeEndian::write_u32(buffer, *v),
-            MaxAttr(v) => NativeEndian::write_u32(buffer, *v),
-            Ops(nlas) => {
-                OpList::from(nlas).as_slice().emit(buffer);
-            }
-            McastGroups(nlas) => {
-                McastGroupList::from(nlas).as_slice().emit(buffer);
-            }
-            Policy(nla) => nla.emit_value(buffer),
-            OpPolicy(nla) => nla.emit_value(buffer),
-            Op(v) => NativeEndian::write_u32(buffer, *v),
-        }
+        */
+        // TODO
     }
 }
 
 impl<'a, T: AsRef<[u8]> + ?Sized> Parseable<NlaBuffer<&'a T>>
-    for GenlCtrlAttrs
+    for IpvsCtrlAttrs
 {
     fn parse(buf: &NlaBuffer<&'a T>) -> Result<Self, DecodeError> {
         let payload = buf.value();
+        println!("Kind is {} and payload is {:?}", buf.kind(), payload);
+        Ok(Self::AddressFamily(AddressFamily::IPv4))
+        /*
         Ok(match buf.kind() {
-            CTRL_ATTR_FAMILY_ID => Self::FamilyId(
+            IPVS_SVC_ATTR_AF => Self::AddressFamily(
                 parse_u16(payload)
                     .context("invalid CTRL_ATTR_FAMILY_ID value")?,
             ),
@@ -167,9 +214,11 @@ impl<'a, T: AsRef<[u8]> + ?Sized> Parseable<NlaBuffer<&'a T>>
                 )))
             }
         })
+        */
     }
 }
 
+/*
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -294,3 +343,4 @@ mod tests {
         assert_eq!(&expected_bytes[..], &buf[..expected_bytes.len()]);
     }
 }
+*/

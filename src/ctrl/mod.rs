@@ -6,8 +6,9 @@
 //! It also serves as an example for creating a generic family.
 
 use self::nlas::*;
-use crate::{constants::*, traits::*, GenlHeader};
+use crate::constants::*;
 use anyhow::Context;
+use netlink_packet_generic::{traits::*, GenlHeader};
 use netlink_packet_utils::{nla::NlasIterator, traits::*, DecodeError};
 use std::convert::{TryFrom, TryInto};
 
@@ -16,63 +17,53 @@ pub mod nlas;
 
 /// Command code definition of Netlink controller (nlctrl) family
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum GenlCtrlCmd {
-    /// Notify from event
-    NewFamily,
-    /// Notify from event
-    DelFamily,
-    /// Request to get family info
-    GetFamily,
-    /// Currently unused
-    NewOps,
-    /// Currently unused
-    DelOps,
-    /// Currently unused
-    GetOps,
-    /// Notify from event
-    NewMcastGrp,
-    /// Notify from event
-    DelMcastGrp,
-    /// Currently unused
-    GetMcastGrp,
-    /// Request to get family policy
-    GetPolicy,
+pub enum IpvsCtrlCmd {
+    Unspec,
+    NewService, /* add service */
+    SetService, /* modify service */
+    DelService, /* delete service */
+    GetService, /* get service info */
+
+    NewDest, /* add destination */
+    SetDest, /* modify destination */
+    DelDest, /* delete destination */
+    GetDest, /* get destination info */
 }
 
-impl From<GenlCtrlCmd> for u8 {
-    fn from(cmd: GenlCtrlCmd) -> u8 {
-        use GenlCtrlCmd::*;
+impl From<IpvsCtrlCmd> for u8 {
+    fn from(cmd: IpvsCtrlCmd) -> u8 {
+        use IpvsCtrlCmd::*;
         match cmd {
-            NewFamily => CTRL_CMD_NEWFAMILY,
-            DelFamily => CTRL_CMD_DELFAMILY,
-            GetFamily => CTRL_CMD_GETFAMILY,
-            NewOps => CTRL_CMD_NEWOPS,
-            DelOps => CTRL_CMD_DELOPS,
-            GetOps => CTRL_CMD_GETOPS,
-            NewMcastGrp => CTRL_CMD_NEWMCAST_GRP,
-            DelMcastGrp => CTRL_CMD_DELMCAST_GRP,
-            GetMcastGrp => CTRL_CMD_GETMCAST_GRP,
-            GetPolicy => CTRL_CMD_GETPOLICY,
+            NewService => IPVS_CMD_NEW_SERVICE,
+            SetService => IPVS_CMD_SET_SERVICE,
+            DelService => IPVS_CMD_DEL_SERVICE,
+            GetService => IPVS_CMD_GET_SERVICE,
+
+            NewDest => IPVS_CMD_NEW_DEST,
+            SetDest => IPVS_CMD_SET_DEST,
+            DelDest => IPVS_CMD_DEL_DEST,
+            GetDest => IPVS_CMD_GET_DEST,
+            Unspec => IPVS_CMD_UNSPEC,
         }
     }
 }
 
-impl TryFrom<u8> for GenlCtrlCmd {
+impl TryFrom<u8> for IpvsCtrlCmd {
     type Error = DecodeError;
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
-        use GenlCtrlCmd::*;
+        use IpvsCtrlCmd::*;
         Ok(match value {
-            CTRL_CMD_NEWFAMILY => NewFamily,
-            CTRL_CMD_DELFAMILY => DelFamily,
-            CTRL_CMD_GETFAMILY => GetFamily,
-            CTRL_CMD_NEWOPS => NewOps,
-            CTRL_CMD_DELOPS => DelOps,
-            CTRL_CMD_GETOPS => GetOps,
-            CTRL_CMD_NEWMCAST_GRP => NewMcastGrp,
-            CTRL_CMD_DELMCAST_GRP => DelMcastGrp,
-            CTRL_CMD_GETMCAST_GRP => GetMcastGrp,
-            CTRL_CMD_GETPOLICY => GetPolicy,
+            IPVS_CMD_NEW_SERVICE => NewService,
+            IPVS_CMD_SET_SERVICE => SetService,
+            IPVS_CMD_DEL_SERVICE => DelService,
+            IPVS_CMD_GET_SERVICE => GetService,
+
+            IPVS_CMD_NEW_DEST => NewDest,
+            IPVS_CMD_SET_DEST => SetDest,
+            IPVS_CMD_DEL_DEST => DelDest,
+            IPVS_CMD_GET_DEST => GetDest,
+            IPVS_CMD_UNSPEC => Unspec,
             cmd => {
                 return Err(DecodeError::from(format!(
                     "Unknown control command: {cmd}"
@@ -84,20 +75,20 @@ impl TryFrom<u8> for GenlCtrlCmd {
 
 /// Payload of generic netlink controller
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct GenlCtrl {
+pub struct IpvsCtrl {
     /// Command code of this message
-    pub cmd: GenlCtrlCmd,
+    pub cmd: IpvsCtrlCmd,
     /// Netlink attributes in this message
-    pub nlas: Vec<GenlCtrlAttrs>,
+    pub nlas: Vec<IpvsCtrlAttrs>,
 }
 
-impl GenlFamily for GenlCtrl {
+impl GenlFamily for IpvsCtrl {
     fn family_name() -> &'static str {
-        "nlctrl"
+        "IPVS"
     }
 
     fn family_id(&self) -> u16 {
-        GENL_ID_CTRL
+        0x27
     }
 
     fn command(&self) -> u8 {
@@ -105,21 +96,22 @@ impl GenlFamily for GenlCtrl {
     }
 
     fn version(&self) -> u8 {
-        2
+        1
     }
 }
 
-impl Emitable for GenlCtrl {
+impl Emitable for IpvsCtrl {
     fn emit(&self, buffer: &mut [u8]) {
         self.nlas.as_slice().emit(buffer)
     }
 
     fn buffer_len(&self) -> usize {
+        println!("buflen called = {}", self.nlas.as_slice().buffer_len());
         self.nlas.as_slice().buffer_len()
     }
 }
 
-impl ParseableParametrized<[u8], GenlHeader> for GenlCtrl {
+impl ParseableParametrized<[u8], GenlHeader> for IpvsCtrl {
     fn parse_with_param(
         buf: &[u8],
         header: GenlHeader,
@@ -131,9 +123,9 @@ impl ParseableParametrized<[u8], GenlHeader> for GenlCtrl {
     }
 }
 
-fn parse_ctrlnlas(buf: &[u8]) -> Result<Vec<GenlCtrlAttrs>, DecodeError> {
+fn parse_ctrlnlas(buf: &[u8]) -> Result<Vec<IpvsCtrlAttrs>, DecodeError> {
     let nlas = NlasIterator::new(buf)
-        .map(|nla| nla.and_then(|nla| GenlCtrlAttrs::parse(&nla)))
+        .map(|nla| nla.and_then(|nla| IpvsCtrlAttrs::parse(&nla)))
         .collect::<Result<Vec<_>, _>>()
         .context("failed to parse control message attributes")?;
 
