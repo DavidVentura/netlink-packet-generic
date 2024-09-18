@@ -117,14 +117,14 @@ impl ParseableParametrized<[u8], GenlHeader> for IpvsCtrl {
     ) -> Result<Self, DecodeError> {
         Ok(Self {
             cmd: header.cmd.try_into()?,
-            nlas: parse_ctrlnlas(buf)?,
+            // skip header
+            nlas: parse_ctrlnlas(&buf[4..])?,
         })
     }
 }
 
 fn parse_ctrlnlas(buf: &[u8]) -> Result<Vec<IpvsCtrlAttrs>, DecodeError> {
-    // skip header
-    let nlas = NlasIterator::new(&buf[4..])
+    let nlas = NlasIterator::new(buf)
         .map(|nla| nla.and_then(|nla| IpvsCtrlAttrs::parse(&nla)))
         .collect::<Result<Vec<_>, _>>()
         .context("failed to parse control message attributes")?;

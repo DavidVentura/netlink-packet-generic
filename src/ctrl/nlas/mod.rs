@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: MIT
 
 use crate::constants::*;
-use anyhow::{bail, Context};
-use byteorder::{BigEndian, ByteOrder, LittleEndian, NativeEndian};
+use anyhow::Context;
+use byteorder::{BigEndian, ByteOrder, LittleEndian};
 use core::str;
 use netlink_packet_utils::{
-    nla::{Nla, NlaBuffer, NlasIterator},
+    nla::{Nla, NlaBuffer},
     parsers::*,
     traits::*,
     DecodeError,
 };
+use std::convert::TryInto;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::{convert::TryInto, mem::size_of_val};
 
 /*
 mod mcast;
