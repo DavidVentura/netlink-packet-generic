@@ -106,7 +106,6 @@ impl Emitable for IpvsCtrl {
     }
 
     fn buffer_len(&self) -> usize {
-        println!("buflen called = {}", self.nlas.as_slice().buffer_len());
         self.nlas.as_slice().buffer_len()
     }
 }
@@ -124,7 +123,8 @@ impl ParseableParametrized<[u8], GenlHeader> for IpvsCtrl {
 }
 
 fn parse_ctrlnlas(buf: &[u8]) -> Result<Vec<IpvsCtrlAttrs>, DecodeError> {
-    let nlas = NlasIterator::new(buf)
+    // skip header
+    let nlas = NlasIterator::new(&buf[4..])
         .map(|nla| nla.and_then(|nla| IpvsCtrlAttrs::parse(&nla)))
         .collect::<Result<Vec<_>, _>>()
         .context("failed to parse control message attributes")?;

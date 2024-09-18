@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 
 use netlink_packet_core::{
-    NetlinkMessage, NetlinkPayload, NLM_F_DUMP, NLM_F_REQUEST,
+    NetlinkMessage, NetlinkPayload, NLM_F_ACK, NLM_F_DUMP, NLM_F_REQUEST,
 };
 use netlink_packet_generic::{
     ctrl::{nlas::GenlCtrlAttrs, GenlCtrl, GenlCtrlCmd},
@@ -20,7 +20,7 @@ fn main() {
     });
     genlmsg.finalize();
     let mut nlmsg = NetlinkMessage::from(genlmsg);
-    nlmsg.header.flags = NLM_F_REQUEST | NLM_F_DUMP;
+    nlmsg.header.flags = NLM_F_REQUEST | NLM_F_DUMP | NLM_F_ACK;
     nlmsg.finalize();
 
     let mut txbuf = vec![0u8; nlmsg.buffer_len()];
@@ -28,11 +28,12 @@ fn main() {
 
     socket.send(&txbuf, 0).unwrap();
 
-    let mut rxbuf = vec![0u8; 4096];
+    let mut rxbuf = vec![0u8; 0];
     let mut offset = 0;
 
     'outer: loop {
         let size = socket.recv(&mut rxbuf, 0).unwrap();
+        println!("{size}");
 
         loop {
             let buf = &rxbuf[offset..];

@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: MIT
 
 use crate::constants::*;
-use anyhow::Context;
-use byteorder::{ByteOrder, NativeEndian};
-use netlink_packet_generic::constants::CTRL_ATTR_OP_FLAGS;
+use anyhow::{bail, Context};
+use byteorder::{BigEndian, ByteOrder, LittleEndian, NativeEndian};
+use core::str;
 use netlink_packet_utils::{
     nla::{Nla, NlaBuffer, NlasIterator},
     parsers::*,
     traits::*,
     DecodeError,
 };
-use std::mem::size_of_val;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::{convert::TryInto, mem::size_of_val};
 
 /*
 mod mcast;
@@ -36,7 +36,13 @@ pub struct Service {
     persistence_timeout: Option<u32>,
     family: AddressFamily,
     protocol: Protocol,
+    stats: Stats,
+    stats64: Stats64,
 }
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Stats;
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Stats64;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Netmask(u8);
@@ -61,6 +67,27 @@ pub enum Scheduler {
     MaglevHashing,
 }
 
+impl From<&str> for Scheduler {
+    fn from(s: &str) -> Self {
+        match s.as_ref() {
+            "rr" => Scheduler::RoundRobin,
+            "wrr" => Scheduler::WeightedRoundRobin,
+            "lc" => Scheduler::LeastConnection,
+            "wlc" => Scheduler::WeightedLeastConnection,
+            "lblc" => Scheduler::LocalityBasedLeastConnection,
+            "lblcr" => Scheduler::LocalityBasedLeastConnectionWithReplication,
+            "dh" => Scheduler::DestinationHashing,
+            "sh" => Scheduler::SourceHashing,
+            "sed" => Scheduler::ShortestExpectedDelay,
+            "nq" => Scheduler::NeverQueue,
+            "fo" | "fail" => Scheduler::WeightedFailover,
+            "ovf" | "flow" => Scheduler::WeightedOverflow,
+            "mh" => Scheduler::MaglevHashing,
+            other => panic!("Unknown scheduler: '{}'", other),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AddressFamily {
     IPv4,
@@ -75,17 +102,37 @@ pub enum Protocol {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MaskBytes(Vec<u8>);
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AddrBytes(Vec<u8>);
+
+impl AddrBytes {
+    pub fn as_ipaddr(&self, family: AddressFamily) -> IpAddr {
+        match family {
+            AddressFamily::IPv4 => IpAddr::V4(Ipv4Addr::new(
+                self.0[0], self.0[1], self.0[2], self.0[3],
+            )),
+            AddressFamily::IPv6 => {
+                let arr: [u8; 16] = self.0.as_slice().try_into().unwrap();
+                IpAddr::V6(Ipv6Addr::from(arr))
+            }
+        }
+    }
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum IpvsCtrlAttrs {
     AddressFamily(AddressFamily),
     Protocol(Protocol),
-    Addr(IpAddr),
+    AddrBytes(AddrBytes),
     Port(u16),
     Flags(Flags),
-    // TODO: Fwmark
+    Fwmark(u32),
     Scheduler(Scheduler),
-    Timeout(Option<u32>),
+    Timeout(u32),
     Netmask(Netmask),
-    // TODO: stats / stats64
+    Stats(Stats),
+    Stats64(Stats64),
 }
 
 impl Nla for IpvsCtrlAttrs {
@@ -101,12 +148,15 @@ impl Nla for IpvsCtrlAttrs {
         match self {
             IpvsCtrlAttrs::AddressFamily(_) => IPVS_SVC_ATTR_AF,
             IpvsCtrlAttrs::Protocol(_) => IPVS_SVC_ATTR_PROTOCOL,
-            IpvsCtrlAttrs::Addr(_) => IPVS_SVC_ATTR_ADDR,
+            IpvsCtrlAttrs::AddrBytes(_) => IPVS_SVC_ATTR_ADDR,
             IpvsCtrlAttrs::Port(_) => IPVS_SVC_ATTR_PORT,
             IpvsCtrlAttrs::Flags(_) => IPVS_SVC_ATTR_FLAGS,
+            IpvsCtrlAttrs::Fwmark(_) => IPVS_SVC_ATTR_FWMARK,
             IpvsCtrlAttrs::Scheduler(_) => IPVS_SVC_ATTR_SCHED_NAME,
             IpvsCtrlAttrs::Timeout(_) => IPVS_SVC_ATTR_TIMEOUT,
             IpvsCtrlAttrs::Netmask(_) => IPVS_SVC_ATTR_NETMASK,
+            IpvsCtrlAttrs::Stats(_) => IPVS_SVC_ATTR_STATS,
+            IpvsCtrlAttrs::Stats64(_) => IPVS_SVC_ATTR_STATS64,
         }
     }
 
@@ -143,78 +193,67 @@ impl<'a, T: AsRef<[u8]> + ?Sized> Parseable<NlaBuffer<&'a T>>
 {
     fn parse(buf: &NlaBuffer<&'a T>) -> Result<Self, DecodeError> {
         let payload = buf.value();
-        println!("Kind is {} and payload is {:?}", buf.kind(), payload);
-        Ok(Self::AddressFamily(AddressFamily::IPv4))
-        /*
+
         Ok(match buf.kind() {
-            IPVS_SVC_ATTR_AF => Self::AddressFamily(
-                parse_u16(payload)
-                    .context("invalid CTRL_ATTR_FAMILY_ID value")?,
-            ),
-            CTRL_ATTR_FAMILY_NAME => Self::FamilyName(
-                parse_string(payload)
-                    .context("invalid CTRL_ATTR_FAMILY_NAME value")?,
-            ),
-            CTRL_ATTR_VERSION => Self::Version(
-                parse_u32(payload)
-                    .context("invalid CTRL_ATTR_VERSION value")?,
-            ),
-            CTRL_ATTR_HDRSIZE => Self::HdrSize(
-                parse_u32(payload)
-                    .context("invalid CTRL_ATTR_HDRSIZE value")?,
-            ),
-            CTRL_ATTR_MAXATTR => Self::MaxAttr(
-                parse_u32(payload)
-                    .context("invalid CTRL_ATTR_MAXATTR value")?,
-            ),
-            CTRL_ATTR_OPS => {
-                let ops = NlasIterator::new(payload)
-                    .map(|nlas| {
-                        nlas.and_then(|nlas| {
-                            NlasIterator::new(nlas.value())
-                                .map(|nla| {
-                                    nla.and_then(|nla| OpAttrs::parse(&nla))
-                                })
-                                .collect::<Result<Vec<_>, _>>()
-                        })
-                    })
-                    .collect::<Result<Vec<Vec<_>>, _>>()
-                    .context("failed to parse CTRL_ATTR_OPS")?;
-                Self::Ops(ops)
+            IPVS_SVC_ATTR_AF => {
+                let val = parse_u16(payload)?;
+                let af = match val {
+                    // FIXME constants
+                    2 => AddressFamily::IPv4,
+                    10 => AddressFamily::IPv6,
+                    other => {
+                        return Err(DecodeError::from(format!(
+                            "unknown addr family {other}",
+                        )))
+                    }
+                };
+                Self::AddressFamily(af)
             }
-            CTRL_ATTR_MCAST_GROUPS => {
-                let groups = NlasIterator::new(payload)
-                    .map(|nlas| {
-                        nlas.and_then(|nlas| {
-                            NlasIterator::new(nlas.value())
-                                .map(|nla| {
-                                    nla.and_then(|nla| {
-                                        McastGrpAttrs::parse(&nla)
-                                    })
-                                })
-                                .collect::<Result<Vec<_>, _>>()
-                        })
-                    })
-                    .collect::<Result<Vec<Vec<_>>, _>>()
-                    .context("failed to parse CTRL_ATTR_MCAST_GROUPS")?;
-                Self::McastGroups(groups)
+            IPVS_SVC_ATTR_ADDR => Self::AddrBytes(AddrBytes(payload.to_vec())),
+            IPVS_SVC_ATTR_PROTOCOL => {
+                let val = parse_u16(payload)?;
+                Self::Protocol(match val {
+                    0x06 => Protocol::TCP,
+                    0x11 => Protocol::UDP,
+                    0x84 => Protocol::SCTP,
+                    other => panic!("Protocol {} is not supported", other),
+                })
             }
-            CTRL_ATTR_POLICY => Self::Policy(
-                PolicyAttr::parse(&NlaBuffer::new(payload))
-                    .context("failed to parse CTRL_ATTR_POLICY")?,
-            ),
-            CTRL_ATTR_OP_POLICY => Self::OpPolicy(
-                OppolicyAttr::parse(&NlaBuffer::new(payload))
-                    .context("failed to parse CTRL_ATTR_OP_POLICY")?,
-            ),
-            CTRL_ATTR_OP => Self::Op(parse_u32(payload)?),
-            kind => {
-                return Err(DecodeError::from(format!(
-                    "Unknown NLA type: {kind}"
-                )))
+            IPVS_SVC_ATTR_PORT => {
+                let val = LittleEndian::read_u16(payload);
+                Self::Port(u16::from_be(val))
+            }
+            IPVS_SVC_ATTR_FLAGS => {
+                let val = LittleEndian::read_u32(payload);
+                Self::Flags(Flags(val))
+            }
+            IPVS_SVC_ATTR_FWMARK => {
+                let val = BigEndian::read_u32(payload);
+                Self::Fwmark(val)
+            }
+            IPVS_SVC_ATTR_SCHED_NAME => {
+                let name = str::from_utf8(payload)
+                    .context("Scheduler name invalid utf-8")?;
+                let name = name.trim_end_matches('\0');
+                Self::Scheduler(Scheduler::from(name))
+            }
+            IPVS_SVC_ATTR_TIMEOUT => {
+                let val = BigEndian::read_u32(payload);
+                Self::Timeout(val)
+            }
+            IPVS_SVC_ATTR_NETMASK => {
+                let ones: u32 =
+                    payload.into_iter().map(|octet| octet.count_ones()).sum();
+                assert!(ones <= 128); // an ipv6 address is 16 bytes
+                Self::Netmask(Netmask(ones as u8))
+            }
+            // TODO
+            IPVS_SVC_ATTR_STATS => Self::Stats(Stats),
+            IPVS_SVC_ATTR_STATS64 => Self::Stats64(Stats64),
+            _ => {
+                panic!("Unhandled {}", buf.kind());
             }
         })
-        */
     }
 }
 
