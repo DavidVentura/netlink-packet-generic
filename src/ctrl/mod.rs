@@ -108,7 +108,7 @@ impl Emitable for IpvsCtrl {
     }
 
     fn buffer_len(&self) -> usize {
-        self.nlas.as_slice().buffer_len()
+        self.nlas.as_slice().buffer_len() + 4
     }
 }
 

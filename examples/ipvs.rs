@@ -67,13 +67,6 @@ fn main() {
         // nlas: [ServiceNla(s.create_nlas)]
         nlas: s.create_nlas(),
     });
-    GenlMessage::from_parts(
-        GenlHeader {
-            cmd: IPVS_CMD_ATTR_SERVICE,
-            version: 1, // TODO??
-        },
-        4,
-    );
     println!("{:?}", s.create_nlas());
     genlmsg.finalize();
     let mut nlmsg = NetlinkMessage::from(genlmsg);
@@ -85,33 +78,39 @@ fn main() {
     let mut txbuf = vec![0u8; nlmsg.buffer_len()];
     nlmsg.serialize(&mut txbuf);
     println!("{:?}", txbuf);
-    // WHAT IS THIS WHAT AM I MISSING
-    //let mut hardcoded_vec = vec![0x54, 0x00, 0x01, 0x80];
-    //hardcoded_vec.append(&mut txbuf);
-    //socket.send(&hardcoded_vec, 0).unwrap();
-    //println!("{hardcoded_vec:?}");
+    let mut hardcoded_vec = vec![0x54, 0x00, 0x01, 0x80];
+    //it's wrapped in another NLA with len 0x54 and type 0x8001, but what's that??
+    let (left, right) = txbuf.split_at(20);
+    let mut left = left.to_vec();
+    let mut right = right.to_vec();
+    left.append(&mut hardcoded_vec);
+    left.append(&mut right);
+    socket.send(&left, 0).unwrap();
+    println!("{left:?}");
 
-    socket.send(&txbuf, 0).unwrap();
+    //socket.send(&txbuf, 0).unwrap();
 
     let mut offset = 0;
 
-    'outer: loop {
-        let (rxbuf, _) = socket.recv_from_full().unwrap();
+    println!("Waiting for a new message");
+    let (rxbuf, _) = socket.recv_from_full().unwrap();
 
-        loop {
-            let buf = &rxbuf[offset..];
-            // Parse the message
-            let msg = <NetlinkMessage<GenlMessage<IpvsCtrl>>>::deserialize(buf)
-                .unwrap();
+    loop {
+        let buf = &rxbuf[offset..];
+        // Parse the message
+        let msg =
+            <NetlinkMessage<GenlMessage<IpvsCtrl>>>::deserialize(buf).unwrap();
 
-            match msg.payload {
-                NetlinkPayload::Done(_) => break 'outer,
-                NetlinkPayload::InnerMessage(genlmsg) => {
-                    if IpvsCtrlCmd::NewService == genlmsg.payload.cmd {
-                        print_entry(genlmsg.payload.nlas);
-                    }
+        match msg.payload {
+            NetlinkPayload::Done(_) => break,
+            NetlinkPayload::InnerMessage(genlmsg) => {
+                if IpvsCtrlCmd::NewService == genlmsg.payload.cmd {
+                    print_entry(genlmsg.payload.nlas);
                 }
-                NetlinkPayload::Error(err) => {
+            }
+            NetlinkPayload::Error(err) => {
+                println!("{:?}", err);
+                if err.code.is_some() {
                     let e = std::io::Error::from_raw_os_error(
                         err.code.unwrap().get().abs(),
                     );
@@ -121,16 +120,17 @@ fn main() {
                     );
                     return;
                 }
-                other => {
-                    println!("{:?}", other)
-                }
             }
+            other => {
+                println!("{:?}", other)
+            }
+        }
 
-            offset += msg.header.length as usize;
-            if offset >= rxbuf.len() || msg.header.length == 0 {
-                offset = 0;
-                break;
-            }
+        offset += msg.header.length as usize;
+        println!("{} {} {}", offset, rxbuf.len(), msg.header.length);
+        if offset >= rxbuf.len() || msg.header.length == 0 {
+            offset = 0;
+            break;
         }
     }
 }
