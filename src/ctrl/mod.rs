@@ -6,6 +6,7 @@
 //! It also serves as an example for creating a generic family.
 
 use self::nlas::*;
+use crate::constants::IPVS_CMD_ATTR_SERVICE;
 use crate::constants::*;
 use anyhow::Context;
 use netlink_packet_generic::{traits::*, GenlHeader};
@@ -88,11 +89,12 @@ impl GenlFamily for IpvsCtrl {
     }
 
     fn family_id(&self) -> u16 {
+        // FIXME shouldn't this come from the kernel??
         0x27
     }
 
     fn command(&self) -> u8 {
-        self.cmd.into()
+        IPVS_CMD_ATTR_SERVICE
     }
 
     fn version(&self) -> u8 {

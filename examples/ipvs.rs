@@ -2,10 +2,13 @@
 use std::net::{IpAddr, Ipv4Addr};
 
 use netlink_packet_core::{
-    NetlinkMessage, NetlinkPayload, NLM_F_DUMP, NLM_F_REQUEST,
+    NetlinkMessage, NetlinkPayload, NLM_F_ACK, NLM_F_DUMP, NLM_F_REQUEST,
 };
-use netlink_packet_generic::GenlMessage;
-use netlink_packet_ipvs::ctrl::{nlas, IpvsCtrl, IpvsCtrlCmd};
+use netlink_packet_generic::{GenlHeader, GenlMessage};
+use netlink_packet_ipvs::{
+    constants::IPVS_CMD_ATTR_SERVICE,
+    ctrl::{nlas, IpvsCtrl, IpvsCtrlCmd},
+};
 use netlink_sys::{protocols::NETLINK_GENERIC, Socket, SocketAddr};
 
 fn main() {
@@ -26,23 +29,67 @@ fn main() {
         stats: nlas::Stats,            // Assuming default Stats
         stats64: nlas::Stats64,        // Assuming default Stats64
     };
+    /*
+         * for ipvsadm -A -t  1.2.3.4:9999 -M 255.255.0.0
+
+         first 20 bytes are netlink header =
+         command=1
+         fam=1
+         len=104
+         flags=5
+    0000   68 00 00 00 27 00 05 00 02 12 eb 66 9f 70 0f 4c   h...'......f.p.L
+    0010   01 01 00 00 54 00 01 80 06 00 01 00 02 00 00 00   ....T...........
+    0020   06 00 02 00 06 00 00 00 14 00 03 00 01 02 03 04   ................
+    0030   00 00 00 00 00 00 00 00 00 00 00 00 06 00 04 00   ................
+    0040   27 0f 00 00 08 00 06 00 77 6c 63 00 0c 00 07 00   '.......wlc.....
+    0050   00 00 00 00 ff ff ff ff 08 00 08 00 00 00 00 00   ................
+    0060   08 00 09 00 ff ff 00 00                           ........
+
+        54 00 01 80 06 00 01 00 02 00 00 00 06 00 02 00 T...............
+        06 00 00 00 14 00 03 00 01 02 03 04 00 00 00 00 ................
+        00 00 00 00 00 00 00 00 06 00 04 00 27 0f 00 00 ............'...
+        08 00 06 00 77 6c 63 00 0c 00 07 00 00 00 00 00 ....wlc.........
+        ff ff ff ff 08 00 08 00 00 00 00 00 08 00 09 00 ................
+        ff ff 00 00                                     ....
+
+        06 00 01 00 02 00 00 00 07 00 06 00 72 72 00 00 ............rr..
+        08 00 07 00 00 00 00 00 08 00 09 00 ff ff 00 00 ................
+        06 00 02 00 06 00 00 00 08 00 03 00 01 02 03 04 ................
+        06 00 04 00 27 0f 00 00                         ....'...
+
+         */
+    // inner-layer = IPVS_CMD_ATTR_SERVICE + packed service
+    // outer-layer = IpvsCtrlCmd::NewService + inner-layer
     let mut genlmsg = GenlMessage::from_payload(IpvsCtrl {
         //cmd: IpvsCtrlCmd::GetService,
         //nlas: vec![],
         cmd: IpvsCtrlCmd::NewService,
+        // nlas: [ServiceNla(s.create_nlas)]
         nlas: s.create_nlas(),
     });
+    GenlMessage::from_parts(
+        GenlHeader {
+            cmd: IPVS_CMD_ATTR_SERVICE,
+            version: 1, // TODO??
+        },
+        4,
+    );
     println!("{:?}", s.create_nlas());
     genlmsg.finalize();
     let mut nlmsg = NetlinkMessage::from(genlmsg);
     // TODO: DUMP for GET, remove DUMP for SET
     //nlmsg.header.flags = NLM_F_REQUEST | NLM_F_DUMP;
-    nlmsg.header.flags = NLM_F_REQUEST;
+    nlmsg.header.flags = NLM_F_REQUEST | NLM_F_ACK;
     nlmsg.finalize();
 
     let mut txbuf = vec![0u8; nlmsg.buffer_len()];
     nlmsg.serialize(&mut txbuf);
     println!("{:?}", txbuf);
+    // WHAT IS THIS WHAT AM I MISSING
+    //let mut hardcoded_vec = vec![0x54, 0x00, 0x01, 0x80];
+    //hardcoded_vec.append(&mut txbuf);
+    //socket.send(&hardcoded_vec, 0).unwrap();
+    //println!("{hardcoded_vec:?}");
 
     socket.send(&txbuf, 0).unwrap();
 
@@ -74,7 +121,9 @@ fn main() {
                     );
                     return;
                 }
-                _ => {}
+                other => {
+                    println!("{:?}", other)
+                }
             }
 
             offset += msg.header.length as usize;

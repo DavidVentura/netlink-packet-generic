@@ -14,6 +14,20 @@ pub const IPVS_CMD_SET_DEST: u8 = 6; /* modify destination */
 pub const IPVS_CMD_DEL_DEST: u8 = 7; /* delete destination */
 pub const IPVS_CMD_GET_DEST: u8 = 8; /* get destination info */
 
+pub const IPVS_CMD_ATTR_UNSPEC: u8 = 0;
+/* nested service attribute */
+pub const IPVS_CMD_ATTR_SERVICE: u8 = 1;
+/* nested destination attribute */
+pub const IPVS_CMD_ATTR_DEST: u8 = 2;
+/* nested sync daemon attribute */
+pub const IPVS_CMD_ATTR_DAEMON: u8 = 3;
+/* TCP connection timeout */
+pub const IPVS_CMD_ATTR_TIMEOUT_TCP: u8 = 4;
+/* TCP FIN wait timeout */
+pub const IPVS_CMD_ATTR_TIMEOUT_TCP_FIN: u8 = 5;
+/* UDP timeout */
+pub const IPVS_CMD_ATTR_TIMEOUT_UDP: u8 = 6;
+
 pub const IPVS_SVC_ATTR_UNSPEC: u16 = 0;
 pub const IPVS_SVC_ATTR_AF: u16 = 1;
 pub const IPVS_SVC_ATTR_PROTOCOL: u16 = 2;

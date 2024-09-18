@@ -10,8 +10,8 @@ use netlink_packet_utils::{
     traits::*,
     DecodeError,
 };
-use std::convert::TryInto;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::{convert::TryInto, num::NonZero};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Service {
@@ -21,7 +21,7 @@ pub struct Service {
     pub flags: Flags,
     pub port: Option<u16>,
     pub fw_mark: Option<u32>,
-    pub persistence_timeout: Option<u32>,
+    pub persistence_timeout: Option<NonZero<u32>>,
     pub family: AddressFamily,
     pub protocol: Protocol,
     pub stats: Stats,
@@ -32,28 +32,33 @@ impl Service {
     pub fn create_nlas(&self) -> Vec<IpvsCtrlAttrs> {
         let mut ret = Vec::new();
         ret.push(IpvsCtrlAttrs::AddressFamily(self.family.clone()));
-        ret.push(IpvsCtrlAttrs::Scheduler(self.scheduler.clone()));
-        // apparently flags should have 0xff x4 ?
-        ret.push(IpvsCtrlAttrs::Flags(self.flags));
-        ret.push(IpvsCtrlAttrs::Netmask(self.netmask.clone()));
-
+        ret.push(IpvsCtrlAttrs::Protocol(self.protocol.clone()));
         let octets = match self.address {
-            IpAddr::V4(v) => v.octets().to_vec(),
+            // apparently it's always a 16-vec
+            IpAddr::V4(v) => {
+                let mut o = v.octets().to_vec();
+                o.append(&mut vec![0u8; 12]);
+                o
+            }
             IpAddr::V6(v) => v.octets().to_vec(),
         };
-
+        ret.push(IpvsCtrlAttrs::AddrBytes(AddrBytes(octets)));
+        if let Some(port) = self.port {
+            ret.push(IpvsCtrlAttrs::Port(port));
+        }
         if let Some(fw_mark) = self.fw_mark {
             ret.push(IpvsCtrlAttrs::Fwmark(fw_mark));
-        } else {
-            ret.push(IpvsCtrlAttrs::Protocol(self.protocol.clone()));
-            ret.push(IpvsCtrlAttrs::AddrBytes(AddrBytes(octets)));
-            if let Some(port) = self.port {
-                ret.push(IpvsCtrlAttrs::Port(port));
-            }
         }
+        ret.push(IpvsCtrlAttrs::Scheduler(self.scheduler.clone()));
+        //// apparently flags should have 0xff x4 ?
+        ret.push(IpvsCtrlAttrs::Flags(self.flags));
         if let Some(timeout) = self.persistence_timeout {
-            ret.push(IpvsCtrlAttrs::Timeout(timeout));
+            ret.push(IpvsCtrlAttrs::Timeout(timeout.get()));
+        } else {
+            ret.push(IpvsCtrlAttrs::Timeout(0));
         }
+        ret.push(IpvsCtrlAttrs::Netmask(self.netmask.clone()));
+
         ret
     }
 }
@@ -197,12 +202,12 @@ pub enum IpvsCtrlAttrs {
 
 impl Nla for IpvsCtrlAttrs {
     fn value_len(&self) -> usize {
-        match self {
+        let res = match self {
             Self::AddressFamily(_) => 2,
             Self::AddrBytes(AddrBytes(bytes)) => bytes.len(),
             Self::Protocol(_) => 2,
             Self::Port(_) => 2,
-            Self::Flags(_) => 4,
+            Self::Flags(_) => 4 + 4, // not sure why, but padded with 4x 0xFF
             Self::Fwmark(_) => 4,
             Self::Scheduler(scheduler) => scheduler.to_string().len() + 1, // +1 for null terminator
             Self::Timeout(_) => 4,
@@ -214,7 +219,8 @@ impl Nla for IpvsCtrlAttrs {
                 // TODO: Return correct size when Stats and Stats64 are defined
                 0
             }
-        }
+        };
+        res
     }
 
     // u16?? same with constants
@@ -261,6 +267,10 @@ impl Nla for IpvsCtrlAttrs {
             }
             Self::Flags(Flags(flags)) => {
                 LittleEndian::write_u32(buffer, *flags);
+                buffer[4] = 0xff;
+                buffer[5] = 0xff;
+                buffer[6] = 0xff;
+                buffer[7] = 0xff;
             }
             Self::Fwmark(fwmark) => {
                 LittleEndian::write_u32(buffer, *fwmark);
