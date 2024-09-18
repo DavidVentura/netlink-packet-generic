@@ -13,31 +13,49 @@ use netlink_packet_utils::{
 use std::convert::TryInto;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-/*
-mod mcast;
-mod oppolicy;
-mod ops;
-mod policy;
-
-pub use mcast::*;
-pub use oppolicy::*;
-pub use ops::*;
-pub use policy::*;
-*/
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Service {
-    address: IpAddr,
-    netmask: Netmask,
-    scheduler: Scheduler,
-    flags: Flags,
-    port: Option<u16>,
-    fw_mark: Option<u32>,
-    persistence_timeout: Option<u32>,
-    family: AddressFamily,
-    protocol: Protocol,
-    stats: Stats,
-    stats64: Stats64,
+    pub address: IpAddr,
+    pub netmask: Netmask,
+    pub scheduler: Scheduler,
+    pub flags: Flags,
+    pub port: Option<u16>,
+    pub fw_mark: Option<u32>,
+    pub persistence_timeout: Option<u32>,
+    pub family: AddressFamily,
+    pub protocol: Protocol,
+    pub stats: Stats,
+    pub stats64: Stats64,
+}
+
+impl Service {
+    pub fn create_nlas(&self) -> Vec<IpvsCtrlAttrs> {
+        let mut ret = Vec::new();
+        ret.push(IpvsCtrlAttrs::AddressFamily(self.family.clone()));
+        ret.push(IpvsCtrlAttrs::Scheduler(self.scheduler.clone()));
+        // apparently flags should have 0xff x4 ?
+        ret.push(IpvsCtrlAttrs::Flags(self.flags));
+        ret.push(IpvsCtrlAttrs::Netmask(self.netmask.clone()));
+
+        let octets = match self.address {
+            IpAddr::V4(v) => v.octets().to_vec(),
+            IpAddr::V6(v) => v.octets().to_vec(),
+        };
+
+        if let Some(fw_mark) = self.fw_mark {
+            ret.push(IpvsCtrlAttrs::Fwmark(fw_mark));
+        } else {
+            ret.push(IpvsCtrlAttrs::Protocol(self.protocol.clone()));
+            ret.push(IpvsCtrlAttrs::AddrBytes(AddrBytes(octets)));
+            if let Some(port) = self.port {
+                ret.push(IpvsCtrlAttrs::Port(port));
+            }
+        }
+        if let Some(timeout) = self.persistence_timeout {
+            ret.push(IpvsCtrlAttrs::Timeout(timeout));
+        }
+        ret
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Stats;
@@ -45,10 +63,33 @@ pub struct Stats;
 pub struct Stats64;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Netmask(u8);
+pub struct Netmask(pub u8, pub AddressFamily);
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Flags(u32);
+impl Netmask {
+    pub fn gen_netmask(&self, buf: &mut [u8]) {
+        let bytes = match self.1 {
+            AddressFamily::IPv4 => 4,
+            AddressFamily::IPv6 => 16,
+        };
+        let full_bytes = self.0 as usize / 8;
+        let remaining_bits = self.0 % 8;
+
+        // Fill full bytes with 1s
+        for i in 0..full_bytes {
+            if i < bytes {
+                buf[i] = 0xFF;
+            }
+        }
+
+        // Fill the partial byte
+        if full_bytes < bytes && remaining_bits > 0 {
+            buf[full_bytes] = 0xFF << (8 - remaining_bits);
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct Flags(pub u32);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Scheduler {
@@ -87,7 +128,26 @@ impl From<&str> for Scheduler {
         }
     }
 }
-
+impl Scheduler {
+    fn to_string(&self) -> String {
+        match self {
+            Scheduler::RoundRobin => "rr",
+            Scheduler::WeightedRoundRobin => "wrr",
+            Scheduler::LeastConnection => "lc",
+            Scheduler::WeightedLeastConnection => "wlc",
+            Scheduler::LocalityBasedLeastConnection => "lblc",
+            Scheduler::LocalityBasedLeastConnectionWithReplication => "lblcr",
+            Scheduler::DestinationHashing => "dh",
+            Scheduler::SourceHashing => "sh",
+            Scheduler::ShortestExpectedDelay => "sed",
+            Scheduler::NeverQueue => "nq",
+            Scheduler::WeightedFailover => "fo",
+            Scheduler::WeightedOverflow => "ovf",
+            Scheduler::MaglevHashing => "mh",
+        }
+        .to_string()
+    }
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AddressFamily {
     IPv4,
@@ -137,10 +197,24 @@ pub enum IpvsCtrlAttrs {
 
 impl Nla for IpvsCtrlAttrs {
     fn value_len(&self) -> usize {
-        println!("value len 333");
-        // TODO
-        //match self {}
-        return 333;
+        match self {
+            Self::AddressFamily(_) => 2,
+            Self::AddrBytes(AddrBytes(bytes)) => bytes.len(),
+            Self::Protocol(_) => 2,
+            Self::Port(_) => 2,
+            Self::Flags(_) => 4,
+            Self::Fwmark(_) => 4,
+            Self::Scheduler(scheduler) => scheduler.to_string().len() + 1, // +1 for null terminator
+            Self::Timeout(_) => 4,
+            Self::Netmask(Netmask(_, addr_family)) => match addr_family {
+                AddressFamily::IPv4 => 4,
+                AddressFamily::IPv6 => 16,
+            },
+            Self::Stats(_) | Self::Stats64(_) => {
+                // TODO: Return correct size when Stats and Stats64 are defined
+                0
+            }
+        }
     }
 
     // u16?? same with constants
@@ -161,30 +235,53 @@ impl Nla for IpvsCtrlAttrs {
     }
 
     fn emit_value(&self, buffer: &mut [u8]) {
-        println!("not emitting value");
-        /*
-            use IpvsCtrlAttrs::*;
-            match self {
-                FamilyId(v) => NativeEndian::write_u16(buffer, *v),
-                FamilyName(s) => {
-                    buffer[..s.len()].copy_from_slice(s.as_bytes());
-                    buffer[s.len()] = 0;
-                }
-                Version(v) => NativeEndian::write_u32(buffer, *v),
-                HdrSize(v) => NativeEndian::write_u32(buffer, *v),
-                MaxAttr(v) => NativeEndian::write_u32(buffer, *v),
-                Ops(nlas) => {
-                    OpList::from(nlas).as_slice().emit(buffer);
-                }
-                McastGroups(nlas) => {
-                    McastGroupList::from(nlas).as_slice().emit(buffer);
-                }
-                Policy(nla) => nla.emit_value(buffer),
-                OpPolicy(nla) => nla.emit_value(buffer),
-                Op(v) => NativeEndian::write_u32(buffer, *v),
+        match self {
+            //TODO constants
+            Self::AddressFamily(af) => {
+                let val = match af {
+                    AddressFamily::IPv4 => 2,
+                    AddressFamily::IPv6 => 10,
+                };
+                LittleEndian::write_u16(buffer, val);
             }
-        */
-        // TODO
+            Self::AddrBytes(AddrBytes(bytes)) => {
+                buffer[..bytes.len()].copy_from_slice(bytes);
+            }
+            //TODO constants
+            Self::Protocol(protocol) => {
+                let val = match protocol {
+                    Protocol::TCP => 0x06,
+                    Protocol::UDP => 0x11,
+                    Protocol::SCTP => 0x84,
+                };
+                LittleEndian::write_u16(buffer, val);
+            }
+            Self::Port(port) => {
+                BigEndian::write_u16(buffer, *port);
+            }
+            Self::Flags(Flags(flags)) => {
+                LittleEndian::write_u32(buffer, *flags);
+            }
+            Self::Fwmark(fwmark) => {
+                LittleEndian::write_u32(buffer, *fwmark);
+            }
+            Self::Scheduler(scheduler) => {
+                let name = scheduler.to_string();
+                buffer[..name.len()].copy_from_slice(name.as_bytes());
+                if name.len() < buffer.len() {
+                    buffer[name.len()] = b'\0';
+                }
+            }
+            Self::Timeout(timeout) => {
+                LittleEndian::write_u32(buffer, *timeout);
+            }
+            Self::Netmask(nm) => {
+                nm.gen_netmask(buffer);
+            }
+            Self::Stats(_) | Self::Stats64(_) => {
+                // TODO: Implement when Stats and Stats64 are defined
+            }
+        }
     }
 }
 
@@ -245,7 +342,9 @@ impl<'a, T: AsRef<[u8]> + ?Sized> Parseable<NlaBuffer<&'a T>>
                 let ones: u32 =
                     payload.into_iter().map(|octet| octet.count_ones()).sum();
                 assert!(ones <= 128); // an ipv6 address is 16 bytes
-                Self::Netmask(Netmask(ones as u8))
+
+                // This is WRONG but needs to be corrected outside
+                Self::Netmask(Netmask(ones as u8, AddressFamily::IPv4))
             }
             // TODO
             IPVS_SVC_ATTR_STATS => Self::Stats(Stats),
@@ -256,130 +355,3 @@ impl<'a, T: AsRef<[u8]> + ?Sized> Parseable<NlaBuffer<&'a T>>
         })
     }
 }
-
-/*
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn mcast_groups_parse() {
-        let mcast_bytes: [u8; 24] = [
-            24, 0, // Netlink header length
-            7, 0, // Netlink header kind (Mcast groups)
-            20, 0, // Mcast group nested NLA length
-            1, 0, // Mcast group kind
-            8, 0, // Id length
-            2, 0, // Id kind
-            1, 0, 0, 0, // Id
-            8, 0, // Name length
-            1, 0, // Name kind
-            b't', b'e', b's', b't', // Name
-        ];
-        let nla_buffer = NlaBuffer::new_checked(&mcast_bytes[..])
-            .expect("Failed to create NlaBuffer");
-        let result_attr = GenlCtrlAttrs::parse(&nla_buffer)
-            .expect("Failed to parse encoded McastGroups");
-        let expected_attr = GenlCtrlAttrs::McastGroups(vec![vec![
-            McastGrpAttrs::Id(1),
-            McastGrpAttrs::Name("test".to_string()),
-        ]]);
-        assert_eq!(expected_attr, result_attr);
-    }
-
-    #[test]
-    fn mcast_groups_emit() {
-        let mcast_attr = GenlCtrlAttrs::McastGroups(vec![
-            vec![
-                McastGrpAttrs::Id(7),
-                McastGrpAttrs::Name("group1".to_string()),
-            ],
-            vec![
-                McastGrpAttrs::Id(8),
-                McastGrpAttrs::Name("group2".to_string()),
-            ],
-        ]);
-        let expected_bytes: [u8; 52] = [
-            52, 0, // Netlink header length
-            7, 0, // Netlink header kind (Mcast groups)
-            24, 0, // Mcast group nested NLA length
-            1, 0, // Mcast group kind (index 1)
-            8, 0, // Id length
-            2, 0, // Id kind
-            7, 0, 0, 0, // Id
-            11, 0, // Name length
-            1, 0, // Name kind
-            b'g', b'r', b'o', b'u', b'p', b'1', 0, // Name
-            0, // mcast group padding
-            24, 0, // Mcast group nested NLA length
-            2, 0, // Mcast group kind (index 2)
-            8, 0, // Id length
-            2, 0, // Id kind
-            8, 0, 0, 0, // Id
-            11, 0, // Name length
-            1, 0, // Name kind
-            b'g', b'r', b'o', b'u', b'p', b'2', 0, // Name
-            0, // padding
-        ];
-        let mut buf = vec![0u8; 100];
-        mcast_attr.emit(&mut buf);
-
-        assert_eq!(&expected_bytes[..], &buf[..expected_bytes.len()]);
-    }
-
-    #[test]
-    fn ops_parse() {
-        let ops_bytes: [u8; 24] = [
-            24, 0, // Netlink header length
-            6, 0, // Netlink header kind (Ops)
-            20, 0, // Op nested NLA length
-            0, 0, // Op kind
-            8, 0, // Id length
-            1, 0, // Id kind
-            1, 0, 0, 0, // Id
-            8, 0, // Flags length
-            2, 0, // Flags kind
-            123, 0, 0, 0, // Flags
-        ];
-        let nla_buffer = NlaBuffer::new_checked(&ops_bytes[..])
-            .expect("Failed to create NlaBuffer");
-        let result_attr = GenlCtrlAttrs::parse(&nla_buffer)
-            .expect("Failed to parse encoded McastGroups");
-        let expected_attr =
-            GenlCtrlAttrs::Ops(vec![vec![OpAttrs::Id(1), OpAttrs::Flags(123)]]);
-        assert_eq!(expected_attr, result_attr);
-    }
-
-    #[test]
-    fn ops_emit() {
-        let ops = GenlCtrlAttrs::Ops(vec![
-            vec![OpAttrs::Id(1), OpAttrs::Flags(11)],
-            vec![OpAttrs::Id(3), OpAttrs::Flags(33)],
-        ]);
-        let expected_bytes: [u8; 44] = [
-            44, 0, // Netlink header length
-            6, 0, // Netlink header kind (Ops)
-            20, 0, // Op nested NLA length
-            1, 0, // Op kind
-            8, 0, // Id length
-            1, 0, // Id kind
-            1, 0, 0, 0, // Id
-            8, 0, // Flags length
-            2, 0, // Flags kind
-            11, 0, 0, 0, // Flags
-            20, 0, // Op nested NLA length
-            2, 0, // Op kind
-            8, 0, // Id length
-            1, 0, // Id kind
-            3, 0, 0, 0, // Id
-            8, 0, // Flags length
-            2, 0, // Flags kind
-            33, 0, 0, 0, // Flags
-        ];
-        let mut buf = vec![0u8; 100];
-        ops.emit(&mut buf);
-
-        assert_eq!(&expected_bytes[..], &buf[..expected_bytes.len()]);
-    }
-}
-*/
