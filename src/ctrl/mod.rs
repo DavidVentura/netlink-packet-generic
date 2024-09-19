@@ -6,7 +6,6 @@
 //! It also serves as an example for creating a generic family.
 
 use self::nlas::*;
-use crate::constants::IPVS_CMD_ATTR_SERVICE;
 use crate::constants::*;
 use anyhow::Context;
 use byteorder::{ByteOrder, NativeEndian};
@@ -94,8 +93,9 @@ impl GenlFamily for IpvsServiceCtrl {
         0x27
     }
 
+    // FIXME is this right
     fn command(&self) -> u8 {
-        IPVS_CMD_ATTR_SERVICE
+        self.cmd.into()
     }
 
     fn version(&self) -> u8 {
@@ -106,12 +106,10 @@ impl GenlFamily for IpvsServiceCtrl {
 impl Emitable for IpvsServiceCtrl {
     fn emit(&self, buffer: &mut [u8]) {
         NativeEndian::write_u16(buffer, self.buffer_len() as u16);
-        // FIXME whyyyyyyyyyyyyyyyy is this wrapped in 0x8001, what even is it
-        NativeEndian::write_u16(&mut buffer[2..], 0x8001);
-        self.nlas.as_slice().emit(&mut buffer[4..])
     }
 
     fn buffer_len(&self) -> usize {
+        // +4 for header
         self.nlas.as_slice().buffer_len() + 4
     }
 }
@@ -123,8 +121,7 @@ impl ParseableParametrized<[u8], GenlHeader> for IpvsServiceCtrl {
     ) -> Result<Self, DecodeError> {
         Ok(Self {
             cmd: header.cmd.try_into()?,
-            // skip header
-            nlas: parse_ctrlnlas(&buf[4..])?,
+            nlas: parse_ctrlnlas(buf)?,
         })
     }
 }

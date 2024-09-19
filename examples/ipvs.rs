@@ -5,7 +5,10 @@ use netlink_packet_core::{
     NetlinkMessage, NetlinkPayload, NLM_F_ACK, NLM_F_DUMP, NLM_F_REQUEST,
 };
 use netlink_packet_generic::GenlMessage;
-use netlink_packet_ipvs::ctrl::{nlas, IpvsCtrlCmd, IpvsServiceCtrl};
+use netlink_packet_ipvs::ctrl::nlas::{
+    self, destination, service, AddressFamily,
+};
+use netlink_packet_ipvs::ctrl::{IpvsCtrlCmd, IpvsServiceCtrl};
 use netlink_sys::{protocols::NETLINK_GENERIC, Socket, SocketAddr};
 
 fn main() {
@@ -13,31 +16,56 @@ fn main() {
     socket.bind_auto().unwrap();
     socket.connect(&SocketAddr::new(0, 0)).unwrap();
 
-    let s = nlas::Service {
+    let d = destination::Destination {
+        address: IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)),
+        fwd_method: destination::ForwardType::Masquerade,
+        weight: 1,
+        upper_threshold: None,
+        lower_threshold: None,
+        port: 666,
+        family: AddressFamily::IPv4,
+        tunnel_type: None,
+        tunnel_port: None,
+        tunnel_flags: None,
+    };
+
+    let s = service::Service {
         address: IpAddr::V4(Ipv4Addr::new(1, 2, 3, 4)),
-        netmask: nlas::Netmask(16, nlas::AddressFamily::IPv4), // 255.255.0.0 is a /16 netmask
-        scheduler: nlas::Scheduler::RoundRobin, // "rr" in the command
-        flags: nlas::Flags(0),                  // Assuming no flags are set
+        netmask: service::Netmask(16, AddressFamily::IPv4), // 255.255.0.0 is a /16 netmask
+        scheduler: service::Scheduler::RoundRobin, // "rr" in the command
+        flags: service::Flags(0),                  // Assuming no flags are set
         port: Some(9999),
         fw_mark: None,             // Not specified in the command
         persistence_timeout: None, // Not specified in the command
-        family: nlas::AddressFamily::IPv4,
-        protocol: nlas::Protocol::TCP, // '-t' in the command indicates TCP
-        stats: nlas::Stats,            // Assuming default Stats
-        stats64: nlas::Stats64,        // Assuming default Stats64
+        family: AddressFamily::IPv4,
+        protocol: service::Protocol::TCP, // '-t' in the command indicates TCP
+        stats: service::Stats,            // Assuming default Stats
+        stats64: service::Stats64,        // Assuming default Stats64
     };
+    //*
     let mut genlmsg = GenlMessage::from_payload(IpvsServiceCtrl {
-        cmd: IpvsCtrlCmd::NewService,
-        nlas: s.create_nlas(),
+        cmd: IpvsCtrlCmd::GetService,
+        nlas: vec![],
     });
-    println!("{:?}", s.create_nlas());
+    //*/
+    /*
+    let mut genlmsg = GenlMessage::from_payload(IpvsServiceCtrl {
+        cmd: IpvsCtrlCmd::NewDest,
+        nlas: d.create_nlas() + s.create_nlas(),
+    });
+    */
+    //println!("{:?}", s.create_nlas());
     genlmsg.finalize();
     let mut nlmsg = NetlinkMessage::from(genlmsg);
     // TODO: DUMP for GET, remove DUMP for SET
-    nlmsg.header.flags = NLM_F_REQUEST | NLM_F_ACK;
+    nlmsg.header.flags = NLM_F_REQUEST | NLM_F_ACK | NLM_F_DUMP;
     nlmsg.finalize();
 
+    println!("{:?}", nlmsg);
+    println!("{}", nlmsg.buffer_len());
+    // header?
     let mut txbuf = vec![0u8; nlmsg.buffer_len()];
+    println!("{:?}", txbuf);
     nlmsg.serialize(&mut txbuf);
     println!("{:?}", txbuf);
 
@@ -58,6 +86,7 @@ fn main() {
         match msg.payload {
             NetlinkPayload::Done(_) => break,
             NetlinkPayload::InnerMessage(genlmsg) => {
+                println!("got {:?}", genlmsg.payload.cmd);
                 if IpvsCtrlCmd::NewService == genlmsg.payload.cmd {
                     print_entry(genlmsg.payload.nlas);
                 }
@@ -83,12 +112,16 @@ fn main() {
         offset += msg.header.length as usize;
         println!("{} {} {}", offset, rxbuf.len(), msg.header.length);
         if offset >= rxbuf.len() || msg.header.length == 0 {
-            offset = 0;
             break;
         }
     }
 }
 
-fn print_entry(entry: Vec<nlas::IpvsCtrlAttrs>) {
-    println!("todo {entry:?}");
+fn print_entry(entries: Vec<nlas::IpvsCtrlAttrs>) {
+    for entry in entries {
+        match entry {
+            nlas::IpvsCtrlAttrs::Service(s) => println!("{:?}", s),
+            _ => todo!(),
+        }
+    }
 }
