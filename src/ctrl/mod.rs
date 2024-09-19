@@ -9,6 +9,7 @@ use self::nlas::*;
 use crate::constants::IPVS_CMD_ATTR_SERVICE;
 use crate::constants::*;
 use anyhow::Context;
+use byteorder::{ByteOrder, NativeEndian};
 use netlink_packet_generic::{traits::*, GenlHeader};
 use netlink_packet_utils::{nla::NlasIterator, traits::*, DecodeError};
 use std::convert::{TryFrom, TryInto};
@@ -76,14 +77,14 @@ impl TryFrom<u8> for IpvsCtrlCmd {
 
 /// Payload of generic netlink controller
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct IpvsCtrl {
+pub struct IpvsServiceCtrl {
     /// Command code of this message
     pub cmd: IpvsCtrlCmd,
     /// Netlink attributes in this message
     pub nlas: Vec<IpvsCtrlAttrs>,
 }
 
-impl GenlFamily for IpvsCtrl {
+impl GenlFamily for IpvsServiceCtrl {
     fn family_name() -> &'static str {
         "IPVS"
     }
@@ -102,9 +103,12 @@ impl GenlFamily for IpvsCtrl {
     }
 }
 
-impl Emitable for IpvsCtrl {
+impl Emitable for IpvsServiceCtrl {
     fn emit(&self, buffer: &mut [u8]) {
-        self.nlas.as_slice().emit(buffer)
+        NativeEndian::write_u16(buffer, self.buffer_len() as u16);
+        // FIXME whyyyyyyyyyyyyyyyy is this wrapped in 0x8001, what even is it
+        NativeEndian::write_u16(&mut buffer[2..], 0x8001);
+        self.nlas.as_slice().emit(&mut buffer[4..])
     }
 
     fn buffer_len(&self) -> usize {
@@ -112,7 +116,7 @@ impl Emitable for IpvsCtrl {
     }
 }
 
-impl ParseableParametrized<[u8], GenlHeader> for IpvsCtrl {
+impl ParseableParametrized<[u8], GenlHeader> for IpvsServiceCtrl {
     fn parse_with_param(
         buf: &[u8],
         header: GenlHeader,

@@ -49,8 +49,8 @@ impl Service {
         if let Some(fw_mark) = self.fw_mark {
             ret.push(IpvsCtrlAttrs::Fwmark(fw_mark));
         }
+        // TODO: on delete it should be just '\0' apparently?
         ret.push(IpvsCtrlAttrs::Scheduler(self.scheduler.clone()));
-        //// apparently flags should have 0xff x4 ?
         ret.push(IpvsCtrlAttrs::Flags(self.flags));
         if let Some(timeout) = self.persistence_timeout {
             ret.push(IpvsCtrlAttrs::Timeout(timeout.get()));
@@ -201,13 +201,16 @@ pub enum IpvsCtrlAttrs {
 }
 
 impl Nla for IpvsCtrlAttrs {
+    fn is_nested(&self) -> bool {
+        true
+    }
     fn value_len(&self) -> usize {
         let res = match self {
             Self::AddressFamily(_) => 2,
             Self::AddrBytes(AddrBytes(bytes)) => bytes.len(),
             Self::Protocol(_) => 2,
             Self::Port(_) => 2,
-            Self::Flags(_) => 4 + 4, // not sure why, but padded with 4x 0xFF
+            Self::Flags(_) => 4 + 4, // FIXME: not sure why, but padded with 4x 0xFF
             Self::Fwmark(_) => 4,
             Self::Scheduler(scheduler) => scheduler.to_string().len() + 1, // +1 for null terminator
             Self::Timeout(_) => 4,
@@ -266,6 +269,7 @@ impl Nla for IpvsCtrlAttrs {
                 BigEndian::write_u16(buffer, *port);
             }
             Self::Flags(Flags(flags)) => {
+                // TODO why
                 LittleEndian::write_u32(buffer, *flags);
                 buffer[4] = 0xff;
                 buffer[5] = 0xff;
