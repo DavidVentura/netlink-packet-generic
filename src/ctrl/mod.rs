@@ -8,7 +8,6 @@
 use self::nlas::*;
 use crate::constants::*;
 use anyhow::Context;
-use byteorder::{ByteOrder, NativeEndian};
 use netlink_packet_generic::{traits::*, GenlHeader};
 use netlink_packet_utils::{nla::NlasIterator, traits::*, DecodeError};
 use std::convert::{TryFrom, TryInto};
@@ -127,12 +126,7 @@ impl ParseableParametrized<[u8], GenlHeader> for IpvsServiceCtrl {
 
 fn parse_ctrlnlas(buf: &[u8]) -> Result<Vec<IpvsCtrlAttrs>, DecodeError> {
     let nlas = NlasIterator::new(buf)
-        .map(|nla| {
-            nla.and_then(|nla| {
-                println!("nla {nla:?}");
-                IpvsCtrlAttrs::parse(&nla)
-            })
-        })
+        .map(|nla| nla.and_then(|nla| IpvsCtrlAttrs::parse(&nla)))
         .collect::<Result<Vec<_>, _>>()
         .context("failed to parse control message attributes")?;
 

@@ -53,8 +53,6 @@ impl<'a, T: AsRef<[u8]> + ?Sized> Parseable<NlaBuffer<&'a T>>
 {
     fn parse(buf: &NlaBuffer<&'a T>) -> Result<Self, DecodeError> {
         let payload = buf.value();
-        println!("{}", buf.kind());
-        println!("payload for svc {:?}", payload);
 
         Ok(match buf.kind() {
             IPVS_CMD_ATTR_SERVICE => {

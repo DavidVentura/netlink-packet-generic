@@ -1,30 +1,99 @@
 use crate::constants::*;
 use crate::ctrl::nlas::AddressFamily;
-use byteorder::{ByteOrder, NativeEndian};
+use byteorder::{ByteOrder, NativeEndian, NetworkEndian};
 use netlink_packet_utils::{
     nla::{Nla, NlaBuffer},
     parsers::*,
     traits::*,
     DecodeError,
 };
-use std::convert::TryFrom;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::num::NonZeroU32;
+use std::{convert::TryFrom, error::Error};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Destination {
     pub address: IpAddr,
-    pub fwd_method: ForwardType,
+    pub fwd_method: ForwardTypeFull,
     pub weight: u32,
     pub upper_threshold: Option<NonZeroU32>,
     pub lower_threshold: Option<NonZeroU32>,
     pub port: u16,
     pub family: AddressFamily,
-    pub tunnel_type: Option<TunnelType>,
-    pub tunnel_port: Option<u16>,
-    pub tunnel_flags: Option<TunnelFlags>,
 }
 
+impl Destination {
+    pub fn from_nlas(
+        nlas: &[DestinationCtrlAttrs],
+    ) -> Result<Destination, Box<dyn Error>> {
+        let mut address = None;
+        let mut fwd_method = None;
+        let mut weight = None;
+        let mut upper_threshold = None;
+        let mut lower_threshold = None;
+        let mut port = None;
+        let mut family = None;
+        let mut tunnel_type = None;
+        let mut tunnel_port = None;
+        let mut tunnel_flags = None;
+
+        for nla in nlas {
+            match nla {
+                DestinationCtrlAttrs::Addr(addr) => address = Some(addr),
+                DestinationCtrlAttrs::FwdMethod(method) => {
+                    fwd_method = Some(method.clone())
+                }
+                DestinationCtrlAttrs::Weight(w) => weight = Some(*w),
+                DestinationCtrlAttrs::UpperThreshold(t) => {
+                    upper_threshold = NonZeroU32::new(*t)
+                }
+                DestinationCtrlAttrs::LowerThreshold(t) => {
+                    lower_threshold = NonZeroU32::new(*t)
+                }
+                DestinationCtrlAttrs::Port(p) => port = Some(*p),
+                DestinationCtrlAttrs::AddrFamily(f) => family = Some(f.clone()),
+                DestinationCtrlAttrs::TunType(t) => {
+                    tunnel_type = Some(t.clone())
+                }
+                DestinationCtrlAttrs::TunPort(p) => tunnel_port = Some(*p),
+                DestinationCtrlAttrs::TunFlags(f) => {
+                    tunnel_flags = Some(f.clone())
+                }
+                _ => {} // Ignore other attributes
+            }
+        }
+
+        let _fam = family.ok_or("Address family is required")?;
+        let __addr = address.ok_or("Address is required")?;
+        let _addr = match _fam {
+            AddressFamily::IPv4 => IpAddr::V4(Ipv4Addr::new(
+                __addr[0], __addr[1], __addr[2], __addr[3],
+            )),
+            AddressFamily::IPv6 => todo!(), //IpAddr::V6(Ipv6Addr::try_from(__addr)),
+        };
+
+        let __fwd = fwd_method.ok_or("Forward method is required")?;
+        let _fwd = match __fwd {
+            ForwardType::Tunnel => ForwardTypeFull::Tunnel {
+                tunnel_type: tunnel_type.ok_or("")?,
+                tunnel_port: tunnel_port.ok_or("")?,
+                tunnel_flags: tunnel_flags.ok_or("")?,
+            },
+            ForwardType::Masquerade => ForwardTypeFull::Masquerade,
+            ForwardType::Direct => ForwardTypeFull::Direct,
+        };
+
+        Ok(Destination {
+            address: _addr,
+            fwd_method: _fwd,
+            weight: weight.ok_or("Weight is required")?,
+            port: port.ok_or("Port is required")?,
+            upper_threshold,
+            lower_threshold,
+            family: _fam,
+        })
+    }
+}
 impl Destination {
     pub fn create_nlas(&self) -> Vec<DestinationCtrlAttrs> {
         Vec::new()
@@ -56,14 +125,27 @@ pub struct Stats {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ForwardTypeFull {
+    Masquerade, // NAT
+    Tunnel {
+        tunnel_type: TunnelType,
+        tunnel_port: u16,
+        tunnel_flags: TunnelFlags,
+    },
+    Direct,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ForwardType {
-    Masquerade,
-    // TODO / not supported
+    Masquerade, // NAT
+    Tunnel,
+    Direct,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TunnelType {
     // TODO / not supported
+    None,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -78,7 +160,7 @@ impl From<u16> for TunnelFlags {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DestinationCtrlAttrs {
-    Addr(IpAddr),
+    Addr(Vec<u8>),
     Port(u16),
     FwdMethod(ForwardType),
     Weight(u32),
@@ -101,10 +183,7 @@ impl Nla for DestinationCtrlAttrs {
     }
     fn value_len(&self) -> usize {
         match self {
-            Self::Addr(addr) => match addr {
-                IpAddr::V4(_) => 4,
-                IpAddr::V6(_) => 16,
-            },
+            Self::Addr(_) => 16,
             Self::Port(_) | Self::TunPort(_) => 2,
             Self::FwdMethod(_)
             | Self::Weight(_)
@@ -113,7 +192,7 @@ impl Nla for DestinationCtrlAttrs {
             | Self::ActiveConns(_)
             | Self::InactiveConns(_)
             | Self::PersistConns(_) => 4,
-            Self::Stats(_) | Self::Stats64(_) => 80, // Assuming 10 u64 fields in Stats
+            Self::Stats(_) | Self::Stats64(_) => 0, // never write stats over the wire
             Self::AddrFamily(_) => 2,
             Self::TunType(_) => 1,
             Self::TunFlags(_) => 2,
@@ -142,17 +221,11 @@ impl Nla for DestinationCtrlAttrs {
 
     fn emit_value(&self, buffer: &mut [u8]) {
         match self {
-            Self::Addr(addr) => match addr {
-                IpAddr::V4(v4) => buffer.copy_from_slice(&v4.octets()),
-                IpAddr::V6(v6) => buffer.copy_from_slice(&v6.octets()),
-            },
-            Self::Port(port) | Self::TunPort(port) => {
-                NativeEndian::write_u16(buffer, *port)
-            }
+            Self::Addr(addr) => buffer.copy_from_slice(&addr),
+            Self::Port(port) => NativeEndian::write_u16(buffer, *port),
+            Self::TunPort(port) => NativeEndian::write_u16(buffer, *port),
             Self::FwdMethod(method) => {
-                // FIXME
-                //NativeEndian::write_u32(buffer, *method as u32)
-                NativeEndian::write_u32(buffer, 1)
+                NativeEndian::write_u32(buffer, method.into())
             }
             Self::Weight(weight) => NativeEndian::write_u32(buffer, *weight),
             Self::UpperThreshold(thresh) => {
@@ -168,57 +241,8 @@ impl Nla for DestinationCtrlAttrs {
             Self::PersistConns(conns) => {
                 NativeEndian::write_u32(buffer, *conns)
             }
-            Self::Stats(stats) | Self::Stats64(stats) => {
-                let mut offset = 0;
-                NativeEndian::write_u64(
-                    &mut buffer[offset..],
-                    stats.connections,
-                );
-                offset += 8;
-                NativeEndian::write_u64(
-                    &mut buffer[offset..],
-                    stats.incoming_packets,
-                );
-                offset += 8;
-                NativeEndian::write_u64(
-                    &mut buffer[offset..],
-                    stats.outgoing_packets,
-                );
-                offset += 8;
-                NativeEndian::write_u64(
-                    &mut buffer[offset..],
-                    stats.incoming_bytes,
-                );
-                offset += 8;
-                NativeEndian::write_u64(
-                    &mut buffer[offset..],
-                    stats.outgoing_bytes,
-                );
-                offset += 8;
-                NativeEndian::write_u64(
-                    &mut buffer[offset..],
-                    stats.connection_rate,
-                );
-                offset += 8;
-                NativeEndian::write_u64(
-                    &mut buffer[offset..],
-                    stats.incoming_packet_rate,
-                );
-                offset += 8;
-                NativeEndian::write_u64(
-                    &mut buffer[offset..],
-                    stats.outgoing_packet_rate,
-                );
-                offset += 8;
-                NativeEndian::write_u64(
-                    &mut buffer[offset..],
-                    stats.incoming_byte_rate,
-                );
-                offset += 8;
-                NativeEndian::write_u64(
-                    &mut buffer[offset..],
-                    stats.outgoing_byte_rate,
-                );
+            Self::Stats(_) | Self::Stats64(_) => {
+                // we never write the stats over the wire
             }
             Self::AddrFamily(family) => {
                 //TODO constants
@@ -228,9 +252,7 @@ impl Nla for DestinationCtrlAttrs {
                 };
                 NativeEndian::write_u16(buffer, val);
             }
-            //Self::TunType(tun_type) => buffer[0] = *tun_type as u8,
-            // FIXME
-            Self::TunType(tun_type) => buffer[0] = 1,
+            Self::TunType(tun_type) => buffer[0] = tun_type.into(),
             Self::TunFlags(flags) => NativeEndian::write_u16(buffer, flags.0),
         }
     }
@@ -243,22 +265,8 @@ impl<'a, T: AsRef<[u8]> + ?Sized> Parseable<NlaBuffer<&'a T>>
         let payload = buf.value();
 
         Ok(match buf.kind() {
-            IPVS_DEST_ATTR_ADDR => {
-                let addr = if payload.len() == 4 {
-                    IpAddr::V4(Ipv4Addr::from(parse_u32(payload)?))
-                } else if payload.len() == 16 {
-                    let mut bytes = [0u8; 16];
-                    bytes.copy_from_slice(payload);
-                    IpAddr::V6(Ipv6Addr::from(bytes))
-                } else {
-                    return Err(DecodeError::from(format!(
-                        "Invalid IP address length: {}",
-                        payload.len()
-                    )));
-                };
-                Self::Addr(addr)
-            }
-            IPVS_DEST_ATTR_PORT => Self::Port(parse_u16(payload)?),
+            IPVS_DEST_ATTR_ADDR => Self::Addr(payload.to_vec()),
+            IPVS_DEST_ATTR_PORT => Self::Port(NetworkEndian::read_u16(payload)),
             IPVS_DEST_ATTR_FWD_METHOD => {
                 Self::FwdMethod(ForwardType::try_from(parse_u32(payload)?)?)
             }
@@ -325,12 +333,24 @@ impl<'a, T: AsRef<[u8]> + ?Sized> Parseable<NlaBuffer<&'a T>>
     }
 }
 
-// Implement necessary conversion traits for ForwardType, AddressFamily, and TunnelType
 impl TryFrom<u32> for ForwardType {
     type Error = DecodeError;
     fn try_from(value: u32) -> Result<Self, Self::Error> {
-        // Implement the conversion logic here
-        unimplemented!()
+        match value {
+            // TODO is this right
+            0 => Ok(ForwardType::Masquerade),
+            _ => panic!("not sure what to do with {}", value),
+        }
+    }
+}
+
+impl From<&ForwardType> for u32 {
+    fn from(ft: &ForwardType) -> u32 {
+        match ft {
+            // TODO is this right
+            ForwardType::Masquerade => 0,
+            _ => todo!("impl non-nat forwardtype"),
+        }
     }
 }
 
@@ -351,7 +371,17 @@ impl TryFrom<u16> for AddressFamily {
 impl TryFrom<u8> for TunnelType {
     type Error = DecodeError;
     fn try_from(value: u8) -> Result<Self, Self::Error> {
-        // Implement the conversion logic here
-        unimplemented!()
+        //TODO is this right
+        match value {
+            0 => Ok(TunnelType::None),
+            other => panic!("not sure what to do with tunnel {}", other),
+        }
+    }
+}
+impl From<&TunnelType> for u8 {
+    fn from(t: &TunnelType) -> u8 {
+        match t {
+            TunnelType::None => 0,
+        }
     }
 }

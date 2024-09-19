@@ -5,6 +5,7 @@ use netlink_packet_core::{
     NetlinkMessage, NetlinkPayload, NLM_F_ACK, NLM_F_DUMP, NLM_F_REQUEST,
 };
 use netlink_packet_generic::GenlMessage;
+use netlink_packet_ipvs::ctrl::nlas::destination::Destination;
 use netlink_packet_ipvs::ctrl::nlas::{
     self, destination, service, AddressFamily,
 };
@@ -18,15 +19,12 @@ fn main() {
 
     let d = destination::Destination {
         address: IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)),
-        fwd_method: destination::ForwardType::Masquerade,
+        fwd_method: destination::ForwardTypeFull::Masquerade,
         weight: 1,
         upper_threshold: None,
         lower_threshold: None,
         port: 666,
         family: AddressFamily::IPv4,
-        tunnel_type: None,
-        tunnel_port: None,
-        tunnel_flags: None,
     };
 
     let s = service::Service {
@@ -44,8 +42,9 @@ fn main() {
     };
     //*
     let mut genlmsg = GenlMessage::from_payload(IpvsServiceCtrl {
-        cmd: IpvsCtrlCmd::NewService,
+        cmd: IpvsCtrlCmd::GetDest,
         nlas: vec![nlas::IpvsCtrlAttrs::Service(s.create_nlas())],
+        //nlas: vec![],
     });
     //*/
     /*
@@ -58,7 +57,7 @@ fn main() {
     genlmsg.finalize();
     let mut nlmsg = NetlinkMessage::from(genlmsg);
     // TODO: DUMP for GET, remove DUMP for SET
-    nlmsg.header.flags = NLM_F_REQUEST | NLM_F_ACK;
+    nlmsg.header.flags = NLM_F_REQUEST | NLM_F_ACK | NLM_F_DUMP;
     nlmsg.finalize();
 
     println!("{:?}", nlmsg);
@@ -87,9 +86,7 @@ fn main() {
             NetlinkPayload::Done(_) => break,
             NetlinkPayload::InnerMessage(genlmsg) => {
                 println!("got {:?}", genlmsg.payload.cmd);
-                if IpvsCtrlCmd::NewService == genlmsg.payload.cmd {
-                    print_entry(genlmsg.payload.nlas);
-                }
+                print_entry(genlmsg.payload.nlas);
             }
             NetlinkPayload::Error(err) => {
                 println!("{:?}", err);
@@ -121,7 +118,9 @@ fn print_entry(entries: Vec<nlas::IpvsCtrlAttrs>) {
     for entry in entries {
         match entry {
             nlas::IpvsCtrlAttrs::Service(s) => println!("{:?}", s),
-            _ => todo!(),
+            nlas::IpvsCtrlAttrs::Destination(s) => {
+                println!("{:?}", Destination::from_nlas(&s))
+            }
         }
     }
 }
