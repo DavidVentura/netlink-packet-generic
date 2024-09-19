@@ -105,7 +105,7 @@ impl GenlFamily for IpvsServiceCtrl {
 
 impl Emitable for IpvsServiceCtrl {
     fn emit(&self, buffer: &mut [u8]) {
-        NativeEndian::write_u16(buffer, self.buffer_len() as u16);
+        self.nlas.as_slice().emit(buffer);
     }
 
     fn buffer_len(&self) -> usize {
@@ -128,7 +128,12 @@ impl ParseableParametrized<[u8], GenlHeader> for IpvsServiceCtrl {
 
 fn parse_ctrlnlas(buf: &[u8]) -> Result<Vec<IpvsCtrlAttrs>, DecodeError> {
     let nlas = NlasIterator::new(buf)
-        .map(|nla| nla.and_then(|nla| IpvsCtrlAttrs::parse(&nla)))
+        .map(|nla| {
+            nla.and_then(|nla| {
+                println!("nla {nla:?}");
+                IpvsCtrlAttrs::parse(&nla)
+            })
+        })
         .collect::<Result<Vec<_>, _>>()
         .context("failed to parse control message attributes")?;
 

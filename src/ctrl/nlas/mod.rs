@@ -3,7 +3,7 @@
 use crate::constants::*;
 use destination::DestinationCtrlAttrs;
 use netlink_packet_utils::{
-    nla::{Nla, NlaBuffer},
+    nla::{Nla, NlaBuffer, NlasIterator},
     traits::*,
     DecodeError,
 };
@@ -49,6 +49,12 @@ impl<'a, T: AsRef<[u8]> + ?Sized> Parseable<NlaBuffer<&'a T>>
 {
     fn parse(buf: &NlaBuffer<&'a T>) -> Result<Self, DecodeError> {
         let payload = buf.value();
+        println!("{}", buf.kind());
+        println!("payload for svc {:?}", payload);
+
+        for nla in NlasIterator::new(payload) {
+            println!("{:?}", SvcCtrlAttrs::parse(&nla?));
+        }
         Ok(match buf.kind() {
             IPVS_CMD_ATTR_SERVICE => {
                 Self::Service(SvcCtrlAttrs::parse(&NlaBuffer::new(payload))?)
