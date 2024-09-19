@@ -44,8 +44,8 @@ fn main() {
     };
     //*
     let mut genlmsg = GenlMessage::from_payload(IpvsServiceCtrl {
-        cmd: IpvsCtrlCmd::GetService,
-        nlas: vec![],
+        cmd: IpvsCtrlCmd::NewService,
+        nlas: vec![nlas::IpvsCtrlAttrs::Service(s.create_nlas())],
     });
     //*/
     /*
@@ -58,7 +58,7 @@ fn main() {
     genlmsg.finalize();
     let mut nlmsg = NetlinkMessage::from(genlmsg);
     // TODO: DUMP for GET, remove DUMP for SET
-    nlmsg.header.flags = NLM_F_REQUEST | NLM_F_ACK | NLM_F_DUMP;
+    nlmsg.header.flags = NLM_F_REQUEST | NLM_F_ACK;
     nlmsg.finalize();
 
     println!("{:?}", nlmsg);

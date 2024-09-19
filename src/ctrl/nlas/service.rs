@@ -196,9 +196,6 @@ pub enum SvcCtrlAttrs {
 }
 
 impl Nla for SvcCtrlAttrs {
-    fn is_nested(&self) -> bool {
-        true
-    }
     fn value_len(&self) -> usize {
         let res = match self {
             Self::AddressFamily(_) => 2,

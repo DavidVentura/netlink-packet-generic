@@ -20,15 +20,18 @@ pub enum AddressFamily {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum IpvsCtrlAttrs {
-    Service(service::SvcCtrlAttrs),
-    Destination(destination::DestinationCtrlAttrs),
+    Service(Vec<service::SvcCtrlAttrs>),
+    Destination(Vec<destination::DestinationCtrlAttrs>),
 }
 
 impl Nla for IpvsCtrlAttrs {
+    fn is_nested(&self) -> bool {
+        true
+    }
     fn value_len(&self) -> usize {
         match self {
-            IpvsCtrlAttrs::Service(nla) => nla.buffer_len(),
-            IpvsCtrlAttrs::Destination(nla) => nla.buffer_len(),
+            IpvsCtrlAttrs::Service(nla) => nla.as_slice().buffer_len(),
+            IpvsCtrlAttrs::Destination(nla) => nla.as_slice().buffer_len(),
         }
     }
     fn kind(&self) -> u16 {
@@ -39,8 +42,9 @@ impl Nla for IpvsCtrlAttrs {
     }
     fn emit_value(&self, buffer: &mut [u8]) {
         match self {
-            IpvsCtrlAttrs::Service(nla) => nla.emit_value(buffer),
-            IpvsCtrlAttrs::Destination(nla) => nla.emit_value(buffer),
+            // TODO emit_value => emit
+            IpvsCtrlAttrs::Service(nla) => nla.as_slice().emit(buffer),
+            IpvsCtrlAttrs::Destination(nla) => nla.as_slice().emit(buffer),
         }
     }
 }
@@ -52,15 +56,17 @@ impl<'a, T: AsRef<[u8]> + ?Sized> Parseable<NlaBuffer<&'a T>>
         println!("{}", buf.kind());
         println!("payload for svc {:?}", payload);
 
-        for nla in NlasIterator::new(payload) {
-            println!("{:?}", SvcCtrlAttrs::parse(&nla?));
-        }
         Ok(match buf.kind() {
             IPVS_CMD_ATTR_SERVICE => {
-                Self::Service(SvcCtrlAttrs::parse(&NlaBuffer::new(payload))?)
+                let nlas = NlasIterator::new(payload)
+                    .map(|nla| SvcCtrlAttrs::parse(&nla?))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Self::Service(nlas)
             }
             IPVS_CMD_ATTR_DEST => Self::Destination(
-                DestinationCtrlAttrs::parse(&NlaBuffer::new(payload))?,
+                NlasIterator::new(payload)
+                    .map(|nla| DestinationCtrlAttrs::parse(&nla?))
+                    .collect::<Result<Vec<_>, _>>()?,
             ),
             other => {
                 panic!("Don't know how to parse with type {}", other);
