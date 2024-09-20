@@ -27,7 +27,7 @@ fn main() {
 
     let s = Service {
         address: IpAddr::V4(Ipv4Addr::new(1, 2, 3, 4)),
-        netmask: service::Netmask(16, AddressFamily::IPv4), // 255.255.0.0 is a /16 netmask
+        netmask: service::Netmask::new(16, AddressFamily::IPv4), // 255.255.0.0 is a /16 netmask
         scheduler: service::Scheduler::RoundRobin, // "rr" in the command
         flags: service::Flags(0),                  // Assuming no flags are set
         port: Some(9999),
@@ -36,8 +36,10 @@ fn main() {
         family: AddressFamily::IPv4,
         protocol: service::Protocol::TCP, // '-t' in the command indicates TCP
     };
-    let txbuf = d.serialize_set(&s, &d2);
-    let txbuf = Service::serialize_get();
+    //let txbuf = d.serialize_set(&s, &d2);
+    //let txbuf = Service::serialize_get();
+    let txbuf = s.serialize_add();
+    //let txbuf = Service::serialize_get();
     let r = send_buf(&txbuf).unwrap();
     for entry in r {
         match entry {

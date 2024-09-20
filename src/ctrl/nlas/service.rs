@@ -11,7 +11,7 @@ use netlink_packet_utils::{
     DecodeError,
 };
 use std::error::Error;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::IpAddr;
 use std::num::NonZero;
 use std::num::NonZeroU32;
 
@@ -65,10 +65,12 @@ impl Service {
 
         let family = family.ok_or("Address family is required")?;
         let address = address.ok_or("Address is required")?.as_ipaddr(family);
+        let netmask = netmask.ok_or("Netmask is required")?;
+        let netmask = Netmask::new(netmask.ones, family);
 
         Ok(Service {
             address,
-            netmask: netmask.ok_or("Netmask is required")?,
+            netmask,
             scheduler: scheduler.ok_or("Scheduler is required")?,
             flags: flags.ok_or("Flags are required")?,
             port,
@@ -148,17 +150,32 @@ pub struct Stats;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Stats64;
 
+// TODO: this could be better without the Option
+// but `value_len` cannot be determined just by the count of ones
+// so we rely on runtime panic!() to assert invariants
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Netmask(pub u8, pub AddressFamily);
+pub struct Netmask {
+    ones: u8,
+    address_family: Option<AddressFamily>,
+}
 
 impl Netmask {
+    pub fn new(ones: u8, address_family: AddressFamily) -> Netmask {
+        Netmask {
+            ones,
+            address_family: Some(address_family),
+        }
+    }
     pub fn gen_netmask(&self, buf: &mut [u8]) {
-        let bytes = match self.1 {
-            AddressFamily::IPv4 => 4,
-            AddressFamily::IPv6 => 16,
+        let bytes = match self.address_family {
+            Some(AddressFamily::IPv4) => 4,
+            Some(AddressFamily::IPv6) => 16,
+            None => {
+                panic!("Trying to generate a netmask without address family")
+            }
         };
-        let full_bytes = self.0 as usize / 8;
-        let remaining_bits = self.0 % 8;
+        let full_bytes = self.ones as usize / 8;
+        let remaining_bits = self.ones % 8;
 
         // Fill full bytes with 1s
         for i in 0..full_bytes {
@@ -271,13 +288,18 @@ impl Nla for SvcCtrlAttrs {
             Self::Fwmark(_) => 4,
             Self::Scheduler(scheduler) => scheduler.to_string().len() + 1, // +1 for null terminator
             Self::Timeout(_) => 4,
-            Self::Netmask(Netmask(_, addr_family)) => match addr_family {
-                AddressFamily::IPv4 => 4,
-                AddressFamily::IPv6 => 16,
+            Self::Netmask(Netmask {
+                ones: _,
+                address_family,
+            }) => match address_family {
+                Some(AddressFamily::IPv4) => 4,
+                Some(AddressFamily::IPv6) => 16,
+                None => {
+                    panic!("Trying to send a netmask without address family")
+                }
             },
             Self::Stats(_) | Self::Stats64(_) => {
-                // TODO: Return correct size when Stats and Stats64 are defined
-                0
+                panic!("Stats | Stats64 should never be sent over the wire")
             }
         };
         res
@@ -326,7 +348,7 @@ impl Nla for SvcCtrlAttrs {
                 BigEndian::write_u16(buffer, *port);
             }
             Self::Flags(Flags(flags)) => {
-                // TODO why
+                // TODO why padding
                 LittleEndian::write_u32(buffer, *flags);
                 buffer[4] = 0xff;
                 buffer[5] = 0xff;
@@ -350,7 +372,7 @@ impl Nla for SvcCtrlAttrs {
                 nm.gen_netmask(buffer);
             }
             Self::Stats(_) | Self::Stats64(_) => {
-                // TODO: Implement when Stats and Stats64 are defined
+                panic!("Stats | Stats64 should never be sent over the wire")
             }
         }
     }
@@ -412,10 +434,11 @@ impl<'a, T: AsRef<[u8]> + ?Sized> Parseable<NlaBuffer<&'a T>> for SvcCtrlAttrs {
                     payload.into_iter().map(|octet| octet.count_ones()).sum();
                 assert!(ones <= 128); // an ipv6 address is 16 bytes
 
-                // This is WRONG but needs to be corrected outside
-                Self::Netmask(Netmask(ones as u8, AddressFamily::IPv4))
+                Self::Netmask(Netmask {
+                    ones: ones as u8,
+                    address_family: None,
+                })
             }
-            // TODO
             IPVS_SVC_ATTR_STATS => Self::Stats(Stats),
             IPVS_SVC_ATTR_STATS64 => Self::Stats64(Stats64),
             _ => {

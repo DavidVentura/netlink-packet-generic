@@ -9,7 +9,7 @@ use netlink_packet_utils::{
     traits::*,
     DecodeError,
 };
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::IpAddr;
 use std::num::NonZeroU32;
 use std::{convert::TryFrom, error::Error};
 
