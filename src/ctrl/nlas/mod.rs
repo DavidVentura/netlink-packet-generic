@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT
+use std::convert::TryInto;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use crate::constants::*;
 use destination::DestinationCtrlAttrs;
@@ -69,5 +71,21 @@ impl<'a, T: AsRef<[u8]> + ?Sized> Parseable<NlaBuffer<&'a T>>
                 panic!("Don't know how to parse with type {}", other);
             }
         })
+    }
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AddrBytes(Vec<u8>);
+
+impl AddrBytes {
+    pub fn as_ipaddr(&self, family: AddressFamily) -> IpAddr {
+        match family {
+            AddressFamily::IPv4 => IpAddr::V4(Ipv4Addr::new(
+                self.0[0], self.0[1], self.0[2], self.0[3],
+            )),
+            AddressFamily::IPv6 => {
+                let arr: [u8; 16] = self.0.as_slice().try_into().unwrap();
+                IpAddr::V6(Ipv6Addr::from(arr))
+            }
+        }
     }
 }

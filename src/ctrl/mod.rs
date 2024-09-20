@@ -8,6 +8,10 @@
 use self::nlas::*;
 use crate::constants::*;
 use anyhow::Context;
+use netlink_packet_core::{
+    NetlinkMessage, NLM_F_ACK, NLM_F_DUMP, NLM_F_REQUEST,
+};
+use netlink_packet_generic::GenlMessage;
 use netlink_packet_generic::{traits::*, GenlHeader};
 use netlink_packet_utils::{nla::NlasIterator, traits::*, DecodeError};
 use std::convert::{TryFrom, TryInto};
@@ -80,6 +84,21 @@ pub struct IpvsServiceCtrl {
     pub cmd: IpvsCtrlCmd,
     /// Netlink attributes in this message
     pub nlas: Vec<IpvsCtrlAttrs>,
+}
+
+impl IpvsServiceCtrl {
+    pub(crate) fn serialize(self, dump: bool) -> Vec<u8> {
+        let genlmsg = GenlMessage::from_payload(self);
+        let mut nlmsg = NetlinkMessage::from(genlmsg);
+        nlmsg.header.flags = NLM_F_REQUEST | NLM_F_ACK;
+        if dump {
+            nlmsg.header.flags |= NLM_F_DUMP;
+        }
+        nlmsg.finalize();
+        let mut txbuf = vec![0u8; nlmsg.buffer_len()];
+        nlmsg.serialize(&mut txbuf);
+        txbuf
+    }
 }
 
 impl GenlFamily for IpvsServiceCtrl {

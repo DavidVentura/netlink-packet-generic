@@ -1,5 +1,6 @@
 use crate::constants::*;
-use crate::ctrl::nlas::AddressFamily;
+use crate::ctrl::nlas::{AddrBytes, AddressFamily, IpvsCtrlAttrs};
+use crate::ctrl::{IpvsCtrlCmd, IpvsServiceCtrl};
 use anyhow::Context;
 use byteorder::{BigEndian, ByteOrder, LittleEndian};
 use core::str;
@@ -9,8 +10,10 @@ use netlink_packet_utils::{
     traits::*,
     DecodeError,
 };
+use std::error::Error;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::{convert::TryInto, num::NonZero};
+use std::num::NonZero;
+use std::num::NonZeroU32;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 // TODO: fwmark is mutually exclusive with (port + proto)
@@ -24,12 +27,58 @@ pub struct Service {
     pub persistence_timeout: Option<NonZero<u32>>,
     pub family: AddressFamily,
     pub protocol: Protocol,
+}
+pub struct ServiceExtended {
+    pub service: Service,
     pub stats: Stats,
     pub stats64: Stats64,
 }
 
 impl Service {
-    pub fn create_nlas(&self) -> Vec<SvcCtrlAttrs> {
+    pub fn from_nlas(nlas: &[SvcCtrlAttrs]) -> Result<Service, Box<dyn Error>> {
+        let mut address = None;
+        let mut netmask = None;
+        let mut scheduler = None;
+        let mut flags = None;
+        let mut port = None;
+        let mut fw_mark = None;
+        let mut persistence_timeout = None;
+        let mut family = None;
+        let mut protocol = None;
+
+        for nla in nlas {
+            match nla {
+                SvcCtrlAttrs::AddressFamily(f) => family = Some(*f),
+                SvcCtrlAttrs::Protocol(p) => protocol = Some(*p),
+                SvcCtrlAttrs::AddrBytes(bytes) => address = Some(bytes.clone()),
+                SvcCtrlAttrs::Port(p) => port = Some(*p),
+                SvcCtrlAttrs::Fwmark(f) => fw_mark = Some(*f),
+                SvcCtrlAttrs::Scheduler(s) => scheduler = Some(s.clone()),
+                SvcCtrlAttrs::Flags(f) => flags = Some(*f),
+                SvcCtrlAttrs::Timeout(t) => {
+                    persistence_timeout = NonZeroU32::new(*t)
+                }
+                SvcCtrlAttrs::Netmask(n) => netmask = Some(n.clone()),
+                _ => {} // Ignore other attributes
+            }
+        }
+
+        let family = family.ok_or("Address family is required")?;
+        let address = address.ok_or("Address is required")?.as_ipaddr(family);
+
+        Ok(Service {
+            address,
+            netmask: netmask.ok_or("Netmask is required")?,
+            scheduler: scheduler.ok_or("Scheduler is required")?,
+            flags: flags.ok_or("Flags are required")?,
+            port,
+            fw_mark,
+            persistence_timeout,
+            family,
+            protocol: protocol.ok_or("Protocol is required")?,
+        })
+    }
+    pub(crate) fn create_nlas(&self) -> Vec<SvcCtrlAttrs> {
         let mut ret = Vec::new();
         ret.push(SvcCtrlAttrs::AddressFamily(self.family));
         ret.push(SvcCtrlAttrs::Protocol(self.protocol));
@@ -61,7 +110,39 @@ impl Service {
 
         ret
     }
+    pub fn serialize_add(&self) -> Vec<u8> {
+        IpvsServiceCtrl {
+            cmd: IpvsCtrlCmd::NewService,
+            nlas: vec![IpvsCtrlAttrs::Service(self.create_nlas())],
+        }
+        .serialize(false)
+    }
+    pub fn serialize_get() -> Vec<u8> {
+        IpvsServiceCtrl {
+            cmd: IpvsCtrlCmd::GetService,
+            nlas: vec![],
+        }
+        .serialize(true)
+    }
+    pub fn serialize_del(&self) -> Vec<u8> {
+        IpvsServiceCtrl {
+            cmd: IpvsCtrlCmd::DelService,
+            nlas: vec![IpvsCtrlAttrs::Service(self.create_nlas())],
+        }
+        .serialize(false)
+    }
+    pub fn serialize_set(&self, other: &Service) -> Vec<u8> {
+        IpvsServiceCtrl {
+            cmd: IpvsCtrlCmd::SetService,
+            nlas: vec![
+                IpvsCtrlAttrs::Service(self.create_nlas()),
+                IpvsCtrlAttrs::Service(other.create_nlas()),
+            ],
+        }
+        .serialize(false)
+    }
 }
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Stats;
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -164,22 +245,6 @@ pub enum Protocol {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MaskBytes(Vec<u8>);
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AddrBytes(Vec<u8>);
-
-impl AddrBytes {
-    pub fn as_ipaddr(&self, family: AddressFamily) -> IpAddr {
-        match family {
-            AddressFamily::IPv4 => IpAddr::V4(Ipv4Addr::new(
-                self.0[0], self.0[1], self.0[2], self.0[3],
-            )),
-            AddressFamily::IPv6 => {
-                let arr: [u8; 16] = self.0.as_slice().try_into().unwrap();
-                IpAddr::V6(Ipv6Addr::from(arr))
-            }
-        }
-    }
-}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SvcCtrlAttrs {
     AddressFamily(AddressFamily),

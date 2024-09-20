@@ -1,23 +1,18 @@
 // SPDX-License-Identifier: MIT
 use std::net::{IpAddr, Ipv4Addr};
 
-use netlink_packet_core::{
-    NetlinkMessage, NetlinkPayload, NLM_F_ACK, NLM_F_DUMP, NLM_F_REQUEST,
-};
+use netlink_packet_core::{NetlinkMessage, NetlinkPayload};
 use netlink_packet_generic::GenlMessage;
 use netlink_packet_ipvs::ctrl::nlas::destination::Destination;
+use netlink_packet_ipvs::ctrl::nlas::service::Service;
 use netlink_packet_ipvs::ctrl::nlas::{
-    self, destination, service, AddressFamily,
+    destination, service, AddressFamily, IpvsCtrlAttrs,
 };
-use netlink_packet_ipvs::ctrl::{IpvsCtrlCmd, IpvsServiceCtrl};
+use netlink_packet_ipvs::ctrl::IpvsServiceCtrl;
 use netlink_sys::{protocols::NETLINK_GENERIC, Socket, SocketAddr};
 
 fn main() {
-    let mut socket = Socket::new(NETLINK_GENERIC).unwrap();
-    socket.bind_auto().unwrap();
-    socket.connect(&SocketAddr::new(0, 0)).unwrap();
-
-    let d = destination::Destination {
+    let d = Destination {
         address: IpAddr::V4(Ipv4Addr::new(8, 8, 4, 4)),
         fwd_method: destination::ForwardTypeFull::Masquerade,
         weight: 1,
@@ -27,7 +22,10 @@ fn main() {
         family: AddressFamily::IPv4,
     };
 
-    let s = service::Service {
+    let mut d2 = d.clone();
+    d2.weight = 1234;
+
+    let s = Service {
         address: IpAddr::V4(Ipv4Addr::new(1, 2, 3, 4)),
         netmask: service::Netmask(16, AddressFamily::IPv4), // 255.255.0.0 is a /16 netmask
         scheduler: service::Scheduler::RoundRobin, // "rr" in the command
@@ -37,50 +35,33 @@ fn main() {
         persistence_timeout: None, // Not specified in the command
         family: AddressFamily::IPv4,
         protocol: service::Protocol::TCP, // '-t' in the command indicates TCP
-        stats: service::Stats,            // Assuming default Stats
-        stats64: service::Stats64,        // Assuming default Stats64
     };
-    //*
-    let mut genlmsg = GenlMessage::from_payload(IpvsServiceCtrl {
-        cmd: IpvsCtrlCmd::NewDest,
-        nlas: vec![
-            nlas::IpvsCtrlAttrs::Service(s.create_nlas()),
-            nlas::IpvsCtrlAttrs::Destination(d.create_nlas()),
-        ],
-        //nlas: vec![],
-    });
-    //*/
-    /*
-    let mut genlmsg = GenlMessage::from_payload(IpvsServiceCtrl {
-        cmd: IpvsCtrlCmd::NewDest,
-        nlas: d.create_nlas() + s.create_nlas(),
-    });
-    */
-    //println!("{:?}", s.create_nlas());
-    genlmsg.finalize();
-    let mut nlmsg = NetlinkMessage::from(genlmsg);
-    // TODO: DUMP for GET, remove DUMP for SET
-    nlmsg.header.flags = NLM_F_REQUEST | NLM_F_ACK;
-    nlmsg.finalize();
-
-    println!("{:?}", nlmsg);
-    println!("{}", nlmsg.buffer_len());
-    // header?
-    let mut txbuf = vec![0u8; nlmsg.buffer_len()];
-    println!("{:?}", txbuf);
-    nlmsg.serialize(&mut txbuf);
-    println!("{:?}", txbuf);
-
-    socket.send(&txbuf, 0).unwrap();
-
+    let txbuf = d.serialize_set(&s, &d2);
+    let txbuf = Service::serialize_get();
+    let r = send_buf(&txbuf).unwrap();
+    for entry in r {
+        match entry {
+            IpvsCtrlAttrs::Service(nlas) => {
+                println!("{:?}", Service::from_nlas(&nlas))
+            }
+            IpvsCtrlAttrs::Destination(nlas) => {
+                println!("{:?}", Destination::from_nlas(&nlas))
+            }
+        }
+    }
+}
+fn send_buf(buf: &[u8]) -> Result<Vec<IpvsCtrlAttrs>, std::io::Error> {
+    let mut socket = Socket::new(NETLINK_GENERIC).unwrap();
+    socket.bind_auto().unwrap();
+    socket.connect(&SocketAddr::new(0, 0)).unwrap();
     let mut offset = 0;
+    socket.send(&buf, 0).unwrap();
 
-    println!("Waiting for a new message");
     let (rxbuf, _) = socket.recv_from_full().unwrap();
 
+    let mut ret = Vec::new();
     loop {
         let buf = &rxbuf[offset..];
-        // Parse the message
         let msg =
             <NetlinkMessage<GenlMessage<IpvsServiceCtrl>>>::deserialize(buf)
                 .unwrap();
@@ -88,20 +69,14 @@ fn main() {
         match msg.payload {
             NetlinkPayload::Done(_) => break,
             NetlinkPayload::InnerMessage(genlmsg) => {
-                println!("got {:?}", genlmsg.payload.cmd);
-                print_entry(genlmsg.payload.nlas);
+                ret.extend_from_slice(&genlmsg.payload.nlas);
             }
             NetlinkPayload::Error(err) => {
-                println!("{:?}", err);
                 if err.code.is_some() {
                     let e = std::io::Error::from_raw_os_error(
                         err.code.unwrap().get().abs(),
                     );
-                    eprintln!(
-                        "Received a netlink error message: {err:?} = {}",
-                        e
-                    );
-                    return;
+                    return Err(e);
                 }
             }
             other => {
@@ -110,20 +85,9 @@ fn main() {
         }
 
         offset += msg.header.length as usize;
-        println!("{} {} {}", offset, rxbuf.len(), msg.header.length);
         if offset >= rxbuf.len() || msg.header.length == 0 {
             break;
         }
     }
-}
-
-fn print_entry(entries: Vec<nlas::IpvsCtrlAttrs>) {
-    for entry in entries {
-        match entry {
-            nlas::IpvsCtrlAttrs::Service(s) => println!("{:?}", s),
-            nlas::IpvsCtrlAttrs::Destination(s) => {
-                println!("{:?}", Destination::from_nlas(&s))
-            }
-        }
-    }
+    Ok(ret)
 }

@@ -1,5 +1,7 @@
 use crate::constants::*;
-use crate::ctrl::nlas::AddressFamily;
+use crate::ctrl::nlas::service::Service;
+use crate::ctrl::nlas::{AddressFamily, IpvsCtrlAttrs};
+use crate::ctrl::{IpvsCtrlCmd, IpvsServiceCtrl};
 use byteorder::{ByteOrder, NativeEndian, NetworkEndian};
 use netlink_packet_utils::{
     nla::{Nla, NlaBuffer},
@@ -10,6 +12,8 @@ use netlink_packet_utils::{
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::num::NonZeroU32;
 use std::{convert::TryFrom, error::Error};
+
+use crate::ctrl::nlas::AddrBytes;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Destination {
@@ -64,16 +68,7 @@ impl Destination {
         }
 
         let family = family.ok_or("Address family is required")?;
-        let addr_bytes = address.ok_or("Address is required")?;
-        let address = match family {
-            AddressFamily::IPv4 => IpAddr::V4(Ipv4Addr::new(
-                addr_bytes[0],
-                addr_bytes[1],
-                addr_bytes[2],
-                addr_bytes[3],
-            )),
-            AddressFamily::IPv6 => todo!(), //IpAddr::V6(Ipv6Addr::try_from(addr_bytes)),
-        };
+        let address = address.ok_or("Address is required")?.as_ipaddr(family);
 
         let partial_fwd_method =
             fwd_method.ok_or("Forward method is required")?;
@@ -100,9 +95,7 @@ impl Destination {
             family,
         })
     }
-}
-impl Destination {
-    pub fn create_nlas(&self) -> Vec<DestinationCtrlAttrs> {
+    fn create_nlas(&self) -> Vec<DestinationCtrlAttrs> {
         let mut ret = Vec::new();
         ret.push(DestinationCtrlAttrs::AddrFamily(self.family));
         let octets = match self.address {
@@ -114,7 +107,7 @@ impl Destination {
             }
             IpAddr::V6(v) => v.octets().to_vec(),
         };
-        ret.push(DestinationCtrlAttrs::Addr(octets));
+        ret.push(DestinationCtrlAttrs::Addr(AddrBytes(octets)));
         ret.push(DestinationCtrlAttrs::Port(u16::to_be(self.port)));
         ret.push(DestinationCtrlAttrs::FwdMethod((&self.fwd_method).into()));
         ret.push(DestinationCtrlAttrs::Weight(self.weight));
@@ -135,6 +128,49 @@ impl Destination {
         ret.push(DestinationCtrlAttrs::LowerThreshold(lt));
 
         ret
+    }
+
+    pub fn serialize_add(&self, service: &Service) -> Vec<u8> {
+        IpvsServiceCtrl {
+            cmd: IpvsCtrlCmd::NewDest,
+            nlas: vec![
+                IpvsCtrlAttrs::Service(service.create_nlas()),
+                IpvsCtrlAttrs::Destination(self.create_nlas()),
+            ],
+        }
+        .serialize(false)
+    }
+    pub fn serialize_get(service: &Service) -> Vec<u8> {
+        IpvsServiceCtrl {
+            cmd: IpvsCtrlCmd::GetDest,
+            nlas: vec![IpvsCtrlAttrs::Service(service.create_nlas())],
+        }
+        .serialize(true)
+    }
+    pub fn serialize_del(&self, service: &Service) -> Vec<u8> {
+        IpvsServiceCtrl {
+            cmd: IpvsCtrlCmd::DelDest,
+            nlas: vec![
+                IpvsCtrlAttrs::Service(service.create_nlas()),
+                IpvsCtrlAttrs::Destination(self.create_nlas()),
+            ],
+        }
+        .serialize(false)
+    }
+    pub fn serialize_set(
+        &self,
+        service: &Service,
+        other: &Destination,
+    ) -> Vec<u8> {
+        IpvsServiceCtrl {
+            cmd: IpvsCtrlCmd::SetDest,
+            nlas: vec![
+                IpvsCtrlAttrs::Service(service.create_nlas()),
+                IpvsCtrlAttrs::Destination(self.create_nlas()),
+                IpvsCtrlAttrs::Destination(other.create_nlas()),
+            ],
+        }
+        .serialize(false)
     }
 }
 
@@ -211,7 +247,7 @@ impl From<u16> for TunnelFlags {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DestinationCtrlAttrs {
-    Addr(Vec<u8>),
+    Addr(AddrBytes),
     Port(u16),
     FwdMethod(ForwardType),
     Weight(u32),
@@ -269,7 +305,7 @@ impl Nla for DestinationCtrlAttrs {
 
     fn emit_value(&self, buffer: &mut [u8]) {
         match self {
-            Self::Addr(addr) => buffer.copy_from_slice(&addr),
+            Self::Addr(addr) => buffer.copy_from_slice(&addr.0),
             Self::Port(port) => NativeEndian::write_u16(buffer, *port),
             Self::TunPort(port) => NativeEndian::write_u16(buffer, *port),
             Self::FwdMethod(method) => {
@@ -313,7 +349,7 @@ impl<'a, T: AsRef<[u8]> + ?Sized> Parseable<NlaBuffer<&'a T>>
         let payload = buf.value();
 
         Ok(match buf.kind() {
-            IPVS_DEST_ATTR_ADDR => Self::Addr(payload.to_vec()),
+            IPVS_DEST_ATTR_ADDR => Self::Addr(AddrBytes(payload.to_vec())),
             IPVS_DEST_ATTR_PORT => Self::Port(NetworkEndian::read_u16(payload)),
             IPVS_DEST_ATTR_FWD_METHOD => {
                 Self::FwdMethod(ForwardType::try_from(parse_u32(payload)?)?)
