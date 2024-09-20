@@ -12,7 +12,7 @@ use service::SvcCtrlAttrs;
 pub mod destination;
 pub mod service;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum AddressFamily {
     IPv4,
     IPv6,
@@ -42,7 +42,6 @@ impl Nla for IpvsCtrlAttrs {
     }
     fn emit_value(&self, buffer: &mut [u8]) {
         match self {
-            // TODO emit_value => emit
             IpvsCtrlAttrs::Service(nla) => nla.as_slice().emit(buffer),
             IpvsCtrlAttrs::Destination(nla) => nla.as_slice().emit(buffer),
         }

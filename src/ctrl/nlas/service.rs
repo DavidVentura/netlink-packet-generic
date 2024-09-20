@@ -31,8 +31,8 @@ pub struct Service {
 impl Service {
     pub fn create_nlas(&self) -> Vec<SvcCtrlAttrs> {
         let mut ret = Vec::new();
-        ret.push(SvcCtrlAttrs::AddressFamily(self.family.clone()));
-        ret.push(SvcCtrlAttrs::Protocol(self.protocol.clone()));
+        ret.push(SvcCtrlAttrs::AddressFamily(self.family));
+        ret.push(SvcCtrlAttrs::Protocol(self.protocol));
         let octets = match self.address {
             // apparently it's always a 16-vec
             IpAddr::V4(v) => {
@@ -50,7 +50,7 @@ impl Service {
             ret.push(SvcCtrlAttrs::Fwmark(fw_mark));
         }
         // TODO: on delete it should be just '\0' apparently?
-        ret.push(SvcCtrlAttrs::Scheduler(self.scheduler.clone()));
+        ret.push(SvcCtrlAttrs::Scheduler(self.scheduler));
         ret.push(SvcCtrlAttrs::Flags(self.flags));
         if let Some(timeout) = self.persistence_timeout {
             ret.push(SvcCtrlAttrs::Timeout(timeout.get()));
@@ -96,7 +96,7 @@ impl Netmask {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct Flags(pub u32);
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Scheduler {
     RoundRobin,
     WeightedRoundRobin,
@@ -154,7 +154,7 @@ impl Scheduler {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Protocol {
     TCP,
     UDP,

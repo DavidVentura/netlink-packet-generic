@@ -18,12 +18,12 @@ fn main() {
     socket.connect(&SocketAddr::new(0, 0)).unwrap();
 
     let d = destination::Destination {
-        address: IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)),
+        address: IpAddr::V4(Ipv4Addr::new(8, 8, 4, 4)),
         fwd_method: destination::ForwardTypeFull::Masquerade,
         weight: 1,
         upper_threshold: None,
         lower_threshold: None,
-        port: 666,
+        port: 5555,
         family: AddressFamily::IPv4,
     };
 
@@ -42,8 +42,11 @@ fn main() {
     };
     //*
     let mut genlmsg = GenlMessage::from_payload(IpvsServiceCtrl {
-        cmd: IpvsCtrlCmd::GetDest,
-        nlas: vec![nlas::IpvsCtrlAttrs::Service(s.create_nlas())],
+        cmd: IpvsCtrlCmd::NewDest,
+        nlas: vec![
+            nlas::IpvsCtrlAttrs::Service(s.create_nlas()),
+            nlas::IpvsCtrlAttrs::Destination(d.create_nlas()),
+        ],
         //nlas: vec![],
     });
     //*/
@@ -57,7 +60,7 @@ fn main() {
     genlmsg.finalize();
     let mut nlmsg = NetlinkMessage::from(genlmsg);
     // TODO: DUMP for GET, remove DUMP for SET
-    nlmsg.header.flags = NLM_F_REQUEST | NLM_F_ACK | NLM_F_DUMP;
+    nlmsg.header.flags = NLM_F_REQUEST | NLM_F_ACK;
     nlmsg.finalize();
 
     println!("{:?}", nlmsg);

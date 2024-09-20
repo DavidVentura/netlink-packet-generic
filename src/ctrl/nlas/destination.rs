@@ -63,40 +63,78 @@ impl Destination {
             }
         }
 
-        let _fam = family.ok_or("Address family is required")?;
-        let __addr = address.ok_or("Address is required")?;
-        let _addr = match _fam {
+        let family = family.ok_or("Address family is required")?;
+        let addr_bytes = address.ok_or("Address is required")?;
+        let address = match family {
             AddressFamily::IPv4 => IpAddr::V4(Ipv4Addr::new(
-                __addr[0], __addr[1], __addr[2], __addr[3],
+                addr_bytes[0],
+                addr_bytes[1],
+                addr_bytes[2],
+                addr_bytes[3],
             )),
-            AddressFamily::IPv6 => todo!(), //IpAddr::V6(Ipv6Addr::try_from(__addr)),
+            AddressFamily::IPv6 => todo!(), //IpAddr::V6(Ipv6Addr::try_from(addr_bytes)),
         };
 
-        let __fwd = fwd_method.ok_or("Forward method is required")?;
-        let _fwd = match __fwd {
+        let partial_fwd_method =
+            fwd_method.ok_or("Forward method is required")?;
+        let fwd_method = match partial_fwd_method {
             ForwardType::Tunnel => ForwardTypeFull::Tunnel {
-                tunnel_type: tunnel_type.ok_or("")?,
-                tunnel_port: tunnel_port.ok_or("")?,
-                tunnel_flags: tunnel_flags.ok_or("")?,
+                tunnel_type: tunnel_type
+                    .ok_or("ForwardType tunnel requires tunnel-type")?,
+                tunnel_port: tunnel_port
+                    .ok_or("ForwardType tunnel requires tunnel-port")?,
+                tunnel_flags: tunnel_flags
+                    .ok_or("ForwardType tunnel requires tunnel-flags")?,
             },
             ForwardType::Masquerade => ForwardTypeFull::Masquerade,
             ForwardType::Direct => ForwardTypeFull::Direct,
         };
 
         Ok(Destination {
-            address: _addr,
-            fwd_method: _fwd,
+            address,
+            fwd_method,
             weight: weight.ok_or("Weight is required")?,
             port: port.ok_or("Port is required")?,
             upper_threshold,
             lower_threshold,
-            family: _fam,
+            family,
         })
     }
 }
 impl Destination {
     pub fn create_nlas(&self) -> Vec<DestinationCtrlAttrs> {
-        Vec::new()
+        let mut ret = Vec::new();
+        ret.push(DestinationCtrlAttrs::AddrFamily(self.family));
+        let octets = match self.address {
+            // apparently it's always a 16-vec
+            IpAddr::V4(v) => {
+                let mut o = v.octets().to_vec();
+                o.append(&mut vec![0u8; 12]);
+                o
+            }
+            IpAddr::V6(v) => v.octets().to_vec(),
+        };
+        ret.push(DestinationCtrlAttrs::Addr(octets));
+        ret.push(DestinationCtrlAttrs::Port(u16::to_be(self.port)));
+        ret.push(DestinationCtrlAttrs::FwdMethod((&self.fwd_method).into()));
+        ret.push(DestinationCtrlAttrs::Weight(self.weight));
+        if let ForwardTypeFull::Tunnel {
+            tunnel_type,
+            tunnel_port,
+            tunnel_flags,
+        } = self.fwd_method
+        {
+            ret.push(DestinationCtrlAttrs::TunType(tunnel_type));
+            ret.push(DestinationCtrlAttrs::TunPort(u16::to_be(tunnel_port)));
+            ret.push(DestinationCtrlAttrs::TunFlags(tunnel_flags));
+        }
+        // d /e /f = type port flags = 0
+        let ut = self.upper_threshold.map(|x| x.get()).unwrap_or(0);
+        ret.push(DestinationCtrlAttrs::UpperThreshold(ut));
+        let lt = self.upper_threshold.map(|x| x.get()).unwrap_or(0);
+        ret.push(DestinationCtrlAttrs::LowerThreshold(lt));
+
+        ret
     }
 }
 
@@ -135,20 +173,33 @@ pub enum ForwardTypeFull {
     Direct,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ForwardType {
     Masquerade, // NAT
     Tunnel,
     Direct,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+impl From<&ForwardTypeFull> for ForwardType {
+    fn from(value: &ForwardTypeFull) -> Self {
+        match value {
+            ForwardTypeFull::Direct => ForwardType::Direct,
+            ForwardTypeFull::Masquerade => ForwardType::Masquerade,
+            ForwardTypeFull::Tunnel {
+                tunnel_type: _,
+                tunnel_port: _,
+                tunnel_flags: _,
+            } => ForwardType::Tunnel,
+        }
+    }
+}
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum TunnelType {
     // TODO / not supported
     None,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct TunnelFlags(pub u16);
 
 // Implement necessary traits (e.g., From, TryFrom) for conversions
@@ -178,9 +229,6 @@ pub enum DestinationCtrlAttrs {
 }
 
 impl Nla for DestinationCtrlAttrs {
-    fn is_nested(&self) -> bool {
-        true
-    }
     fn value_len(&self) -> usize {
         match self {
             Self::Addr(_) => 16,

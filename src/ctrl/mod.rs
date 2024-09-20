@@ -92,7 +92,6 @@ impl GenlFamily for IpvsServiceCtrl {
         0x27
     }
 
-    // FIXME is this right
     fn command(&self) -> u8 {
         self.cmd.into()
     }
