@@ -84,10 +84,12 @@ pub struct IpvsServiceCtrl {
     pub cmd: IpvsCtrlCmd,
     /// Netlink attributes in this message
     pub nlas: Vec<IpvsCtrlAttrs>,
+
+    pub family_id: u16,
 }
 
 impl IpvsServiceCtrl {
-    pub(crate) fn serialize(self, dump: bool) -> Vec<u8> {
+    pub fn serialize(self, dump: bool) -> Vec<u8> {
         let genlmsg = GenlMessage::from_payload(self);
         let mut nlmsg = NetlinkMessage::from(genlmsg);
         nlmsg.header.flags = NLM_F_REQUEST | NLM_F_ACK;
@@ -107,8 +109,7 @@ impl GenlFamily for IpvsServiceCtrl {
     }
 
     fn family_id(&self) -> u16 {
-        // FIXME shouldn't this come from the kernel??
-        0x27
+        self.family_id
     }
 
     fn command(&self) -> u8 {
@@ -135,9 +136,11 @@ impl ParseableParametrized<[u8], GenlHeader> for IpvsServiceCtrl {
         buf: &[u8],
         header: GenlHeader,
     ) -> Result<Self, DecodeError> {
+        println!("is this family: {}", (buf[0] as u16) << 8 | buf[1] as u16);
         Ok(Self {
             cmd: header.cmd.try_into()?,
             nlas: parse_ctrlnlas(buf)?,
+            family_id: 999, // FIXME what to do here - probably buf[0..2]?
         })
     }
 }

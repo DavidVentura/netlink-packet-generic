@@ -1,6 +1,5 @@
 use crate::constants::*;
-use crate::ctrl::nlas::{AddrBytes, AddressFamily, IpvsCtrlAttrs};
-use crate::ctrl::{IpvsCtrlCmd, IpvsServiceCtrl};
+use crate::ctrl::nlas::{AddrBytes, AddressFamily};
 use anyhow::Context;
 use byteorder::{BigEndian, ByteOrder, LittleEndian};
 use core::str;
@@ -80,7 +79,7 @@ impl Service {
             protocol: protocol.ok_or("Protocol is required")?,
         })
     }
-    pub(crate) fn create_nlas(&self) -> Vec<SvcCtrlAttrs> {
+    pub fn create_nlas(&self) -> Vec<SvcCtrlAttrs> {
         let mut ret = Vec::new();
         ret.push(SvcCtrlAttrs::AddressFamily(self.family));
         ret.push(SvcCtrlAttrs::Protocol(self.protocol));
@@ -100,7 +99,6 @@ impl Service {
         if let Some(fw_mark) = self.fw_mark {
             ret.push(SvcCtrlAttrs::Fwmark(fw_mark));
         }
-        // TODO: on delete it should be just '\0' apparently?
         ret.push(SvcCtrlAttrs::Scheduler(self.scheduler));
         ret.push(SvcCtrlAttrs::Flags(self.flags));
         if let Some(timeout) = self.persistence_timeout {
@@ -112,37 +110,6 @@ impl Service {
 
         ret
     }
-    pub fn serialize_add(&self) -> Vec<u8> {
-        IpvsServiceCtrl {
-            cmd: IpvsCtrlCmd::NewService,
-            nlas: vec![IpvsCtrlAttrs::Service(self.create_nlas())],
-        }
-        .serialize(false)
-    }
-    pub fn serialize_get() -> Vec<u8> {
-        IpvsServiceCtrl {
-            cmd: IpvsCtrlCmd::GetService,
-            nlas: vec![],
-        }
-        .serialize(true)
-    }
-    pub fn serialize_del(&self) -> Vec<u8> {
-        IpvsServiceCtrl {
-            cmd: IpvsCtrlCmd::DelService,
-            nlas: vec![IpvsCtrlAttrs::Service(self.create_nlas())],
-        }
-        .serialize(false)
-    }
-    pub fn serialize_set(&self, other: &Service) -> Vec<u8> {
-        IpvsServiceCtrl {
-            cmd: IpvsCtrlCmd::SetService,
-            nlas: vec![
-                IpvsCtrlAttrs::Service(self.create_nlas()),
-                IpvsCtrlAttrs::Service(other.create_nlas()),
-            ],
-        }
-        .serialize(false)
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -153,7 +120,7 @@ pub struct Stats64;
 // TODO: this could be better without the Option
 // but `value_len` cannot be determined just by the count of ones
 // so we rely on runtime panic!() to assert invariants
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Copy)]
 pub struct Netmask {
     ones: u8,
     address_family: Option<AddressFamily>,

@@ -1,7 +1,5 @@
 use crate::constants::*;
-use crate::ctrl::nlas::service::Service;
-use crate::ctrl::nlas::{AddressFamily, IpvsCtrlAttrs};
-use crate::ctrl::{IpvsCtrlCmd, IpvsServiceCtrl};
+use crate::ctrl::nlas::AddressFamily;
 use byteorder::{ByteOrder, NativeEndian, NetworkEndian};
 use netlink_packet_utils::{
     nla::{Nla, NlaBuffer},
@@ -95,7 +93,7 @@ impl Destination {
             family,
         })
     }
-    fn create_nlas(&self) -> Vec<DestinationCtrlAttrs> {
+    pub fn create_nlas(&self) -> Vec<DestinationCtrlAttrs> {
         let mut ret = Vec::new();
         ret.push(DestinationCtrlAttrs::AddrFamily(self.family));
         let octets = match self.address {
@@ -129,49 +127,6 @@ impl Destination {
 
         ret
     }
-
-    pub fn serialize_add(&self, service: &Service) -> Vec<u8> {
-        IpvsServiceCtrl {
-            cmd: IpvsCtrlCmd::NewDest,
-            nlas: vec![
-                IpvsCtrlAttrs::Service(service.create_nlas()),
-                IpvsCtrlAttrs::Destination(self.create_nlas()),
-            ],
-        }
-        .serialize(false)
-    }
-    pub fn serialize_get(service: &Service) -> Vec<u8> {
-        IpvsServiceCtrl {
-            cmd: IpvsCtrlCmd::GetDest,
-            nlas: vec![IpvsCtrlAttrs::Service(service.create_nlas())],
-        }
-        .serialize(true)
-    }
-    pub fn serialize_del(&self, service: &Service) -> Vec<u8> {
-        IpvsServiceCtrl {
-            cmd: IpvsCtrlCmd::DelDest,
-            nlas: vec![
-                IpvsCtrlAttrs::Service(service.create_nlas()),
-                IpvsCtrlAttrs::Destination(self.create_nlas()),
-            ],
-        }
-        .serialize(false)
-    }
-    pub fn serialize_set(
-        &self,
-        service: &Service,
-        other: &Destination,
-    ) -> Vec<u8> {
-        IpvsServiceCtrl {
-            cmd: IpvsCtrlCmd::SetDest,
-            nlas: vec![
-                IpvsCtrlAttrs::Service(service.create_nlas()),
-                IpvsCtrlAttrs::Destination(self.create_nlas()),
-                IpvsCtrlAttrs::Destination(other.create_nlas()),
-            ],
-        }
-        .serialize(false)
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -198,7 +153,7 @@ pub struct Stats {
     pub outgoing_byte_rate: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Copy)]
 pub enum ForwardTypeFull {
     Masquerade, // NAT
     Tunnel {
