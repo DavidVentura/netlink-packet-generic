@@ -136,11 +136,11 @@ impl ParseableParametrized<[u8], GenlHeader> for IpvsServiceCtrl {
         buf: &[u8],
         header: GenlHeader,
     ) -> Result<Self, DecodeError> {
-        println!("is this family: {}", (buf[0] as u16) << 8 | buf[1] as u16);
         Ok(Self {
             cmd: header.cmd.try_into()?,
             nlas: parse_ctrlnlas(buf)?,
             family_id: 999, // FIXME what to do here - probably buf[0..2]?
+                            // seems like this value is not used for anything
         })
     }
 }
