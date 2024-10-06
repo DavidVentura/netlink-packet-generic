@@ -1,5 +1,5 @@
 use crate::constants::*;
-use crate::ctrl::nlas::{AddrBytes, AddressFamily};
+use crate::ctrl::nlas::{AddrBytes, AddressFamily, Stats64, Stats64Attr};
 use anyhow::Context;
 use byteorder::{BigEndian, ByteOrder, LittleEndian};
 use core::str;
@@ -30,7 +30,7 @@ pub struct Service {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ServiceExtended {
     pub service: Service,
-    pub stats: Stats,
+    // stats64 are available since kernel 4.0, from 2015
     pub stats64: Stats64,
 }
 
@@ -71,7 +71,7 @@ impl Service {
                 }
                 SvcCtrlAttrs::Netmask(n) => netmask = Some(n.clone()),
                 SvcCtrlAttrs::Stats64(n) => stats64 = Some(n.clone()),
-                _ => {} // Ignore other attributes
+                SvcCtrlAttrs::Stats => (),
             }
         }
 
@@ -93,7 +93,6 @@ impl Service {
         };
         Ok(ServiceExtended {
             service: s,
-            stats: Stats::default(),
             stats64: stats64.ok_or("Did not receive stats64")?,
         })
     }
@@ -129,11 +128,6 @@ impl Service {
         ret
     }
 }
-
-//pub struct Stats;
-//#[derive(Clone, Debug, PartialEq, Eq)]
-//#[derive(Clone, Debug, PartialEq, Eq)]
-//pub struct Stats64;
 
 // TODO: this could be better without the Option
 // but `value_len` cannot be determined just by the count of ones
@@ -258,7 +252,7 @@ pub enum SvcCtrlAttrs {
     Scheduler(Scheduler),
     Timeout(u32),
     Netmask(Netmask),
-    Stats(Stats),
+    Stats,
     Stats64(Stats64),
 }
 
@@ -283,8 +277,8 @@ impl Nla for SvcCtrlAttrs {
                     panic!("Trying to send a netmask without address family")
                 }
             },
-            Self::Stats(_) | Self::Stats64(_) => {
-                panic!("Stats | Stats64 should never be sent over the wire")
+            Self::Stats | Self::Stats64(_) => {
+                panic!("Stats64 should never be sent over the wire")
             }
         };
         res
@@ -301,8 +295,8 @@ impl Nla for SvcCtrlAttrs {
             SvcCtrlAttrs::Scheduler(_) => IPVS_SVC_ATTR_SCHED_NAME,
             SvcCtrlAttrs::Timeout(_) => IPVS_SVC_ATTR_TIMEOUT,
             SvcCtrlAttrs::Netmask(_) => IPVS_SVC_ATTR_NETMASK,
-            SvcCtrlAttrs::Stats(_) => IPVS_SVC_ATTR_STATS,
             SvcCtrlAttrs::Stats64(_) => IPVS_SVC_ATTR_STATS64,
+            SvcCtrlAttrs::Stats => IPVS_SVC_ATTR_STATS,
         }
     }
 
@@ -355,8 +349,8 @@ impl Nla for SvcCtrlAttrs {
             Self::Netmask(nm) => {
                 nm.gen_netmask(buffer);
             }
-            Self::Stats(_) | Self::Stats64(_) => {
-                panic!("Stats | Stats64 should never be sent over the wire")
+            Self::Stats | Self::Stats64(_) => {
+                panic!("Stats64 should never be sent over the wire")
             }
         }
     }
@@ -423,10 +417,6 @@ impl<'a, T: AsRef<[u8]> + ?Sized> Parseable<NlaBuffer<&'a T>> for SvcCtrlAttrs {
                     address_family: None,
                 })
             }
-            IPVS_SVC_ATTR_STATS => {
-                // TODO
-                Self::Stats(Stats::default())
-            }
             IPVS_SVC_ATTR_STATS64 => {
                 let nlas = NlasIterator::new(payload)
                     .map(|nla| nla.and_then(|nla| Stats64Attr::parse(&nla)))
@@ -434,118 +424,10 @@ impl<'a, T: AsRef<[u8]> + ?Sized> Parseable<NlaBuffer<&'a T>> for SvcCtrlAttrs {
                     .context("failed to parse control message attributes")?;
                 Self::Stats64(Stats64::from_nlas(nlas)?)
             }
+            IPVS_SVC_ATTR_STATS => Self::Stats,
             _ => {
                 panic!("Unhandled {}", buf.kind());
             }
         })
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
-pub struct Stats {
-    pub connections: u64,
-    pub incoming_packets: u64,
-    pub outgoing_packets: u64,
-    pub incoming_bytes: u64,
-    pub outgoing_bytes: u64,
-    pub connection_rate: u64,
-    pub incoming_packet_rate: u64,
-    pub outgoing_packet_rate: u64,
-    pub incoming_byte_rate: u64,
-    pub outgoing_byte_rate: u64,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
-pub struct Stats64(pub Stats);
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Stats64Attr {
-    ConnCount(u64),
-    IncPktCount(u64),
-    OutPktCount(u64),
-    IncByteCount(u64),
-    OutByteCount(u64),
-    ConnRate(u64),
-    IncPktRate(u64),
-    OutPktRate(u64),
-    IncByteRate(u64),
-    OutByteRate(u64),
-}
-
-pub mod constants {
-    pub const STATS_ATTR_CONNS: u16 = 1;
-    pub const STATS_ATTR_INPKTS: u16 = 2;
-    pub const STATS_ATTR_OUTPKTS: u16 = 3;
-    pub const STATS_ATTR_INBYTES: u16 = 4;
-    pub const STATS_ATTR_OUTBYTES: u16 = 5;
-    pub const STATS_ATTR_CPS: u16 = 6;
-    pub const STATS_ATTR_INPPS: u16 = 7;
-    pub const STATS_ATTR_OUTPPS: u16 = 8;
-    pub const STATS_ATTR_INBPS: u16 = 9;
-    pub const STATS_ATTR_OUTBPS: u16 = 10;
-}
-impl<'a, T: AsRef<[u8]> + ?Sized> Parseable<NlaBuffer<&'a T>> for Stats64Attr {
-    fn parse(buf: &NlaBuffer<&'a T>) -> Result<Self, DecodeError> {
-        let payload = buf.value();
-        match buf.kind() {
-            constants::STATS_ATTR_CONNS => {
-                Ok(Stats64Attr::ConnCount(LittleEndian::read_u64(payload)))
-            }
-            constants::STATS_ATTR_INPKTS => {
-                Ok(Stats64Attr::IncPktCount(LittleEndian::read_u64(payload)))
-            }
-            constants::STATS_ATTR_OUTPKTS => {
-                Ok(Stats64Attr::OutPktCount(LittleEndian::read_u64(payload)))
-            }
-            constants::STATS_ATTR_INBYTES => {
-                Ok(Stats64Attr::IncByteCount(LittleEndian::read_u64(payload)))
-            }
-            constants::STATS_ATTR_OUTBYTES => {
-                Ok(Stats64Attr::OutByteCount(LittleEndian::read_u64(payload)))
-            }
-            constants::STATS_ATTR_CPS => {
-                Ok(Stats64Attr::ConnRate(LittleEndian::read_u64(payload)))
-            }
-            constants::STATS_ATTR_INPPS => {
-                Ok(Stats64Attr::IncPktRate(LittleEndian::read_u64(payload)))
-            }
-            constants::STATS_ATTR_OUTPPS => {
-                Ok(Stats64Attr::OutPktRate(LittleEndian::read_u64(payload)))
-            }
-            constants::STATS_ATTR_INBPS => {
-                Ok(Stats64Attr::IncByteRate(LittleEndian::read_u64(payload)))
-            }
-            constants::STATS_ATTR_OUTBPS => {
-                Ok(Stats64Attr::OutByteRate(LittleEndian::read_u64(payload)))
-            }
-            _ => Err(DecodeError::from("unexpected kind for stats64 attr")),
-        }
-    }
-}
-
-impl Stats64 {
-    pub fn from_nlas(nlas: Vec<Stats64Attr>) -> Result<Self, DecodeError> {
-        let mut stats = Stats::default();
-
-        for nla in nlas {
-            match nla {
-                Stats64Attr::ConnCount(val) => stats.connections = val,
-                Stats64Attr::IncPktCount(val) => stats.incoming_packets = val,
-                Stats64Attr::OutPktCount(val) => stats.outgoing_packets = val,
-                Stats64Attr::IncByteCount(val) => stats.incoming_bytes = val,
-                Stats64Attr::OutByteCount(val) => stats.outgoing_bytes = val,
-                Stats64Attr::ConnRate(val) => stats.connection_rate = val,
-                Stats64Attr::IncPktRate(val) => {
-                    stats.incoming_packet_rate = val
-                }
-                Stats64Attr::OutPktRate(val) => {
-                    stats.outgoing_packet_rate = val
-                }
-                Stats64Attr::IncByteRate(val) => stats.incoming_byte_rate = val,
-                Stats64Attr::OutByteRate(val) => stats.outgoing_byte_rate = val,
-            }
-        }
-
-        Ok(Stats64(stats))
     }
 }

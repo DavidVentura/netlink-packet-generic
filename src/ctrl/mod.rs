@@ -11,6 +11,7 @@ use anyhow::Context;
 use netlink_packet_core::{
     NetlinkMessage, NLM_F_ACK, NLM_F_DUMP, NLM_F_REQUEST,
 };
+use netlink_packet_generic::ctrl::{nlas::GenlCtrlAttrs, GenlCtrl};
 use netlink_packet_generic::GenlMessage;
 use netlink_packet_generic::{traits::*, GenlHeader};
 use netlink_packet_utils::{nla::NlasIterator, traits::*, DecodeError};
@@ -88,6 +89,19 @@ pub struct IpvsServiceCtrl {
     pub family_id: u16,
 }
 
+pub trait Nlas<'a, T> {
+    fn nlas(&'a self) -> &'a [T];
+}
+impl<'a> Nlas<'a, IpvsCtrlAttrs> for IpvsServiceCtrl {
+    fn nlas(&'a self) -> &'a [IpvsCtrlAttrs] {
+        self.nlas.as_slice()
+    }
+}
+impl<'a> Nlas<'a, GenlCtrlAttrs> for GenlCtrl {
+    fn nlas(&'a self) -> &'a [GenlCtrlAttrs] {
+        self.nlas.as_slice()
+    }
+}
 impl IpvsServiceCtrl {
     pub fn serialize(self, dump: bool) -> Vec<u8> {
         let genlmsg = GenlMessage::from_payload(self);

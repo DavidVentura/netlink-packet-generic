@@ -1,8 +1,9 @@
 use crate::constants::*;
-use crate::ctrl::nlas::AddressFamily;
+use crate::ctrl::nlas::{AddrBytes, AddressFamily, Stats64, Stats64Attr};
+use anyhow::Context;
 use byteorder::{ByteOrder, NativeEndian, NetworkEndian};
 use netlink_packet_utils::{
-    nla::{Nla, NlaBuffer},
+    nla::{Nla, NlaBuffer, NlasIterator},
     parsers::*,
     traits::*,
     DecodeError,
@@ -10,8 +11,6 @@ use netlink_packet_utils::{
 use std::net::IpAddr;
 use std::num::NonZeroU32;
 use std::{convert::TryFrom, error::Error};
-
-use crate::ctrl::nlas::AddrBytes;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Destination {
@@ -29,8 +28,7 @@ pub struct DestinationExtended {
     pub active_connections: u32,
     pub inactive_connections: u32,
     pub persistent_connections: u32,
-    pub stats: Stats,
-    pub stats64: Stats,
+    pub stats64: Stats64,
 }
 
 impl DestinationExtended {
@@ -47,6 +45,7 @@ impl DestinationExtended {
         let mut tunnel_type = None;
         let mut tunnel_port = None;
         let mut tunnel_flags = None;
+        let mut stats64 = None;
 
         let mut active_connections = None;
         let mut inactive_connections = None;
@@ -83,12 +82,8 @@ impl DestinationExtended {
                 DestinationCtrlAttrs::PersistConns(a) => {
                     persistent_connections = Some(*a)
                 }
-                DestinationCtrlAttrs::Stats(_) => {
-                    // TODO: stats
-                }
-                DestinationCtrlAttrs::Stats64(_) => {
-                    // TODO: stats
-                }
+                DestinationCtrlAttrs::Stats64(s) => stats64 = Some(s.clone()),
+                DestinationCtrlAttrs::Stats => (),
             }
         }
 
@@ -127,8 +122,7 @@ impl DestinationExtended {
                 .ok_or("Active connections is required")?,
             persistent_connections: persistent_connections
                 .ok_or("Persistent connections is required")?,
-            stats: Stats::default(),
-            stats64: Stats::default(),
+            stats64: stats64.ok_or("Stats64 are required")?,
         })
     }
 }
@@ -167,20 +161,6 @@ impl Destination {
 
         ret
     }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
-pub struct Stats {
-    pub connections: u64,
-    pub incoming_packets: u64,
-    pub outgoing_packets: u64,
-    pub incoming_bytes: u64,
-    pub outgoing_bytes: u64,
-    pub connection_rate: u64,
-    pub incoming_packet_rate: u64,
-    pub outgoing_packet_rate: u64,
-    pub incoming_byte_rate: u64,
-    pub outgoing_byte_rate: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Copy)]
@@ -241,9 +221,9 @@ pub enum DestinationCtrlAttrs {
     ActiveConns(u32),
     InactiveConns(u32),
     PersistConns(u32),
-    Stats(Stats),
     AddrFamily(AddressFamily),
-    Stats64(Stats),
+    Stats64(Stats64),
+    Stats,
     TunType(TunnelType),
     TunPort(u16),
     TunFlags(TunnelFlags),
@@ -261,7 +241,7 @@ impl Nla for DestinationCtrlAttrs {
             | Self::ActiveConns(_)
             | Self::InactiveConns(_)
             | Self::PersistConns(_) => 4,
-            Self::Stats(_) | Self::Stats64(_) => 0, // never write stats over the wire
+            Self::Stats | Self::Stats64(_) => 0, // never write stats over the wire
             Self::AddrFamily(_) => 2,
             Self::TunType(_) => 1,
             Self::TunFlags(_) => 2,
@@ -279,9 +259,9 @@ impl Nla for DestinationCtrlAttrs {
             Self::ActiveConns(_) => IPVS_DEST_ATTR_ACTIVE_CONNS,
             Self::InactiveConns(_) => IPVS_DEST_ATTR_INACT_CONNS,
             Self::PersistConns(_) => IPVS_DEST_ATTR_PERSIST_CONNS,
-            Self::Stats(_) => IPVS_DEST_ATTR_STATS,
             Self::AddrFamily(_) => IPVS_DEST_ATTR_ADDR_FAMILY,
             Self::Stats64(_) => IPVS_DEST_ATTR_STATS64,
+            Self::Stats => IPVS_DEST_ATTR_STATS,
             Self::TunType(_) => IPVS_DEST_ATTR_TUN_TYPE,
             Self::TunPort(_) => IPVS_DEST_ATTR_TUN_PORT,
             Self::TunFlags(_) => IPVS_DEST_ATTR_TUN_FLAGS,
@@ -310,7 +290,7 @@ impl Nla for DestinationCtrlAttrs {
             Self::PersistConns(conns) => {
                 NativeEndian::write_u32(buffer, *conns)
             }
-            Self::Stats(_) | Self::Stats64(_) => {
+            Self::Stats | Self::Stats64(_) => {
                 panic!("should never write this");
                 // we never write the stats over the wire
             }
@@ -356,33 +336,14 @@ impl<'a, T: AsRef<[u8]> + ?Sized> Parseable<NlaBuffer<&'a T>>
             IPVS_DEST_ATTR_PERSIST_CONNS => {
                 Self::PersistConns(parse_u32(payload)?)
             }
-            IPVS_DEST_ATTR_STATS | IPVS_DEST_ATTR_STATS64 => {
-                let stats = Stats {
-                    connections: NativeEndian::read_u64(&payload[0..8]),
-                    incoming_packets: NativeEndian::read_u64(&payload[8..16]),
-                    outgoing_packets: NativeEndian::read_u64(&payload[16..24]),
-                    incoming_bytes: NativeEndian::read_u64(&payload[24..32]),
-                    outgoing_bytes: NativeEndian::read_u64(&payload[32..40]),
-                    connection_rate: NativeEndian::read_u64(&payload[40..48]),
-                    incoming_packet_rate: NativeEndian::read_u64(
-                        &payload[48..56],
-                    ),
-                    outgoing_packet_rate: NativeEndian::read_u64(
-                        &payload[56..64],
-                    ),
-                    incoming_byte_rate: NativeEndian::read_u64(
-                        &payload[64..72],
-                    ),
-                    outgoing_byte_rate: NativeEndian::read_u64(
-                        &payload[72..80],
-                    ),
-                };
-                if buf.kind() == IPVS_DEST_ATTR_STATS {
-                    Self::Stats(stats)
-                } else {
-                    Self::Stats64(stats)
-                }
+            IPVS_DEST_ATTR_STATS64 => {
+                let nlas = NlasIterator::new(payload)
+                    .map(|nla| nla.and_then(|nla| Stats64Attr::parse(&nla)))
+                    .collect::<Result<Vec<_>, _>>()
+                    .context("failed to parse control message attributes")?;
+                Self::Stats64(Stats64::from_nlas(nlas)?)
             }
+            IPVS_SVC_ATTR_STATS => Self::Stats,
             IPVS_DEST_ATTR_ADDR_FAMILY => {
                 Self::AddrFamily(AddressFamily::try_from(parse_u16(payload)?)?)
             }
