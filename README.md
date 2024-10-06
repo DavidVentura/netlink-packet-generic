@@ -1,1 +1,1 @@
-# Rust crate for generic netlink packet types
+Rust crate for talking to IPVS over Generic Netlink
