@@ -64,12 +64,12 @@ impl Service {
                 SvcCtrlAttrs::AddrBytes(bytes) => address = Some(bytes.clone()),
                 SvcCtrlAttrs::Port(p) => port = Some(*p),
                 SvcCtrlAttrs::Fwmark(f) => fw_mark = Some(*f),
-                SvcCtrlAttrs::Scheduler(s) => scheduler = Some(s.clone()),
+                SvcCtrlAttrs::Scheduler(s) => scheduler = Some(*s),
                 SvcCtrlAttrs::Flags(f) => flags = Some(*f),
                 SvcCtrlAttrs::Timeout(t) => {
                     persistence_timeout = NonZeroU32::new(*t)
                 }
-                SvcCtrlAttrs::Netmask(n) => netmask = Some(n.clone()),
+                SvcCtrlAttrs::Netmask(n) => netmask = Some(*n),
                 SvcCtrlAttrs::Stats64(n) => stats64 = Some(n.clone()),
                 SvcCtrlAttrs::Stats => (),
             }
@@ -123,7 +123,7 @@ impl Service {
         } else {
             ret.push(SvcCtrlAttrs::Timeout(0));
         }
-        ret.push(SvcCtrlAttrs::Netmask(self.netmask.clone()));
+        ret.push(SvcCtrlAttrs::Netmask(self.netmask));
 
         ret
     }
@@ -140,13 +140,21 @@ pub struct Netmask {
 
 impl Netmask {
     pub fn new(ones: u8, address_family: AddressFamily) -> Netmask {
+        let max = match address_family {
+            AddressFamily::IPv4 => 32,
+            AddressFamily::IPv6 => 128,
+        };
+        if ones > max {
+            panic!("'ones' cannot be more than length of IP address in bits");
+        }
+
         Netmask {
             ones,
             address_family: Some(address_family),
         }
     }
     pub fn gen_netmask(&self, buf: &mut [u8]) {
-        let bytes = match self.address_family {
+        let addr_len = match self.address_family {
             Some(AddressFamily::IPv4) => 4,
             Some(AddressFamily::IPv6) => 16,
             None => {
@@ -156,20 +164,52 @@ impl Netmask {
         let full_bytes = self.ones as usize / 8;
         let remaining_bits = self.ones % 8;
 
-        // Fill full bytes with 1s
-        for i in 0..full_bytes {
-            if i < bytes {
-                buf[i] = 0xFF;
-            }
-        }
+        // Fill the part of the mask which is composed of full bytes
+        // ex, in IPv4, a /17 would have 2 full bytes (255, 255, 1, 0)
+        buf[0..full_bytes].fill(0xff);
 
-        // Fill the partial byte
-        if full_bytes < bytes && remaining_bits > 0 {
+        // Either 0 or 1 bytes are partially set
+        if remaining_bits > 0 {
             buf[full_bytes] = 0xFF << (8 - remaining_bits);
+        }
+        // 0 or more bytes are un-set
+        if addr_len > full_bytes {
+            if remaining_bits == 0 {
+                buf[full_bytes] = 0;
+            }
+            buf[full_bytes + 1..addr_len].fill(0x00);
         }
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use crate::ctrl::AddressFamily;
+
+    use super::Netmask;
+    #[test]
+    fn test_netmask_v4() {
+        let mut buf = vec![0xaa; 4];
+        let nm = Netmask::new(17, AddressFamily::IPv4);
+        nm.gen_netmask(buf.as_mut_slice());
+        assert_eq!(buf.as_slice(), &[0xff, 0xff, 0x80, 0]);
+
+        let mut buf = vec![0xaa; 4];
+        let nm = Netmask::new(24, AddressFamily::IPv4);
+        nm.gen_netmask(buf.as_mut_slice());
+        assert_eq!(buf.as_slice(), &[0xff, 0xff, 0xff, 0]);
+
+        let mut buf = vec![0xaa; 4];
+        let nm = Netmask::new(0, AddressFamily::IPv4);
+        nm.gen_netmask(buf.as_mut_slice());
+        assert_eq!(buf.as_slice(), &[0x00, 0x00, 0x00, 0]);
+
+        let mut buf = vec![0xaa; 4];
+        let nm = Netmask::new(32, AddressFamily::IPv4);
+        nm.gen_netmask(buf.as_mut_slice());
+        assert_eq!(buf.as_slice(), &[0xff, 0xff, 0xff, 0xff]);
+    }
+}
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct Flags(pub u32);
 
@@ -192,7 +232,7 @@ pub enum Scheduler {
 
 impl From<&str> for Scheduler {
     fn from(s: &str) -> Self {
-        match s.as_ref() {
+        match s {
             "rr" => Scheduler::RoundRobin,
             "wrr" => Scheduler::WeightedRoundRobin,
             "lc" => Scheduler::LeastConnection,
@@ -211,7 +251,7 @@ impl From<&str> for Scheduler {
     }
 }
 impl Scheduler {
-    fn to_string(&self) -> String {
+    fn as_string(&self) -> String {
         match self {
             Scheduler::RoundRobin => "rr",
             Scheduler::WeightedRoundRobin => "wrr",
@@ -258,14 +298,14 @@ pub enum SvcCtrlAttrs {
 
 impl Nla for SvcCtrlAttrs {
     fn value_len(&self) -> usize {
-        let res = match self {
+        match self {
             Self::AddressFamily(_) => 2,
             Self::AddrBytes(AddrBytes(bytes)) => bytes.len(),
             Self::Protocol(_) => 2,
             Self::Port(_) => 2,
             Self::Flags(_) => 4 + 4, // FIXME: not sure why, but padded with 4x 0xFF
             Self::Fwmark(_) => 4,
-            Self::Scheduler(scheduler) => scheduler.to_string().len() + 1, // +1 for null terminator
+            Self::Scheduler(scheduler) => scheduler.as_string().len() + 1, // +1 for null terminator
             Self::Timeout(_) => 4,
             Self::Netmask(Netmask {
                 ones: _,
@@ -280,8 +320,7 @@ impl Nla for SvcCtrlAttrs {
             Self::Stats | Self::Stats64(_) => {
                 panic!("Stats64 should never be sent over the wire")
             }
-        };
-        res
+        }
     }
 
     fn kind(&self) -> u16 {
@@ -337,7 +376,7 @@ impl Nla for SvcCtrlAttrs {
                 LittleEndian::write_u32(buffer, *fwmark);
             }
             Self::Scheduler(scheduler) => {
-                let name = scheduler.to_string();
+                let name = scheduler.as_string();
                 buffer[..name.len()].copy_from_slice(name.as_bytes());
                 if name.len() < buffer.len() {
                     buffer[name.len()] = b'\0';
@@ -409,7 +448,7 @@ impl<'a, T: AsRef<[u8]> + ?Sized> Parseable<NlaBuffer<&'a T>> for SvcCtrlAttrs {
             }
             IPVS_SVC_ATTR_NETMASK => {
                 let ones: u32 =
-                    payload.into_iter().map(|octet| octet.count_ones()).sum();
+                    payload.iter().map(|octet| octet.count_ones()).sum();
                 assert!(ones <= 128); // an ipv6 address is 16 bytes
 
                 Self::Netmask(Netmask {

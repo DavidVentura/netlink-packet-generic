@@ -55,7 +55,7 @@ impl DestinationExtended {
             match nla {
                 DestinationCtrlAttrs::Addr(addr) => address = Some(addr),
                 DestinationCtrlAttrs::FwdMethod(method) => {
-                    fwd_method = Some(method.clone())
+                    fwd_method = Some(*method)
                 }
                 DestinationCtrlAttrs::Weight(w) => weight = Some(*w),
                 DestinationCtrlAttrs::UpperThreshold(t) => {
@@ -65,14 +65,10 @@ impl DestinationExtended {
                     lower_threshold = NonZeroU32::new(*t)
                 }
                 DestinationCtrlAttrs::Port(p) => port = Some(*p),
-                DestinationCtrlAttrs::AddrFamily(f) => family = Some(f.clone()),
-                DestinationCtrlAttrs::TunType(t) => {
-                    tunnel_type = Some(t.clone())
-                }
+                DestinationCtrlAttrs::AddrFamily(f) => family = Some(*f),
+                DestinationCtrlAttrs::TunType(t) => tunnel_type = Some(*t),
                 DestinationCtrlAttrs::TunPort(p) => tunnel_port = Some(*p),
-                DestinationCtrlAttrs::TunFlags(f) => {
-                    tunnel_flags = Some(f.clone())
-                }
+                DestinationCtrlAttrs::TunFlags(f) => tunnel_flags = Some(*f),
                 DestinationCtrlAttrs::ActiveConns(a) => {
                     active_connections = Some(*a)
                 }
