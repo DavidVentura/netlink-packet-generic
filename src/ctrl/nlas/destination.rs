@@ -23,11 +23,20 @@ pub struct Destination {
     pub port: u16,
     pub family: AddressFamily,
 }
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DestinationExtended {
+    pub destination: Destination,
+    pub active_connections: u32,
+    pub inactive_connections: u32,
+    pub persistent_connections: u32,
+    pub stats: Stats,
+    pub stats64: Stats,
+}
 
-impl Destination {
+impl DestinationExtended {
     pub fn from_nlas(
         nlas: &[DestinationCtrlAttrs],
-    ) -> Result<Destination, Box<dyn Error>> {
+    ) -> Result<DestinationExtended, Box<dyn Error>> {
         let mut address = None;
         let mut fwd_method = None;
         let mut weight = None;
@@ -38,6 +47,10 @@ impl Destination {
         let mut tunnel_type = None;
         let mut tunnel_port = None;
         let mut tunnel_flags = None;
+
+        let mut active_connections = None;
+        let mut inactive_connections = None;
+        let mut persistent_connections = None;
 
         for nla in nlas {
             match nla {
@@ -61,7 +74,21 @@ impl Destination {
                 DestinationCtrlAttrs::TunFlags(f) => {
                     tunnel_flags = Some(f.clone())
                 }
-                _ => {} // Ignore other attributes
+                DestinationCtrlAttrs::ActiveConns(a) => {
+                    active_connections = Some(*a)
+                }
+                DestinationCtrlAttrs::InactiveConns(a) => {
+                    inactive_connections = Some(*a)
+                }
+                DestinationCtrlAttrs::PersistConns(a) => {
+                    persistent_connections = Some(*a)
+                }
+                DestinationCtrlAttrs::Stats(_) => {
+                    // TODO: stats
+                }
+                DestinationCtrlAttrs::Stats64(_) => {
+                    // TODO: stats
+                }
             }
         }
 
@@ -83,7 +110,7 @@ impl Destination {
             ForwardType::Direct => ForwardTypeFull::Direct,
         };
 
-        Ok(Destination {
+        let d = Destination {
             address,
             fwd_method,
             weight: weight.ok_or("Weight is required")?,
@@ -91,8 +118,21 @@ impl Destination {
             upper_threshold,
             lower_threshold,
             family,
+        };
+        Ok(DestinationExtended {
+            destination: d,
+            inactive_connections: inactive_connections
+                .ok_or("Inactive connections is required")?,
+            active_connections: active_connections
+                .ok_or("Active connections is required")?,
+            persistent_connections: persistent_connections
+                .ok_or("Persistent connections is required")?,
+            stats: Stats::default(),
+            stats64: Stats::default(),
         })
     }
+}
+impl Destination {
     pub fn create_nlas(&self) -> Vec<DestinationCtrlAttrs> {
         let mut ret = Vec::new();
         ret.push(DestinationCtrlAttrs::AddrFamily(self.family));
@@ -129,17 +169,7 @@ impl Destination {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DestinationExtended {
-    pub destination: Destination,
-    pub active_connections: u32,
-    pub inactive_connections: u32,
-    pub persistent_connections: u32,
-    pub stats: Stats,
-    pub stats64: Stats,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct Stats {
     pub connections: u64,
     pub incoming_packets: u64,
@@ -281,6 +311,7 @@ impl Nla for DestinationCtrlAttrs {
                 NativeEndian::write_u32(buffer, *conns)
             }
             Self::Stats(_) | Self::Stats64(_) => {
+                panic!("should never write this");
                 // we never write the stats over the wire
             }
             Self::AddrFamily(family) => {

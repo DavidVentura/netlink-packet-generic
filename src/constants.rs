@@ -50,6 +50,7 @@ pub const IPVS_DEST_ATTR_FWD_METHOD: u16 = 3; /* forwarding method */
 pub const IPVS_DEST_ATTR_WEIGHT: u16 = 4; /* destination weight */
 pub const IPVS_DEST_ATTR_U_THRESH: u16 = 5; /* upper threshold */
 pub const IPVS_DEST_ATTR_L_THRESH: u16 = 6; /* lower threshold */
+
 pub const IPVS_DEST_ATTR_ACTIVE_CONNS: u16 = 7; /* active connections */
 pub const IPVS_DEST_ATTR_INACT_CONNS: u16 = 8; /* inactive connections */
 pub const IPVS_DEST_ATTR_PERSIST_CONNS: u16 = 9; /* persistent connections */
